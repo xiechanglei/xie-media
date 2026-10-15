@@ -140,8 +140,8 @@ cd ~/MyMedia && xie-ms
 ```
 <你的目录>/
 ├── upload_temp/    上传临时暂存（服务会自动清理，勿手动存放文件）
-├── store/          正式媒体文件，**以 md5 命名**（无扩展名），相同内容自动去重
-├── thumbnails/     视频缩略图（首次访问时懒生成，<md5>.jpg）
+├── store/          正式媒体文件，以 md5 命名（无扩展名），按 md5 前两位分子目录存放（<xx>/<md5>），相同内容自动去重
+├── thumbnails/     视频缩略图（首次访问时懒生成，同样按前两位分片：<xx>/<md5>.jpg）
 ├── media.db        SQLite 数据库（元数据：collections / items / favorites，勿手动编辑）
 └── users.json      用户与全局设置（包含 admin / 审核开关 / IP 名单等）
 ```

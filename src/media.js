@@ -67,13 +67,19 @@ function mapItemRow(it) {
 export function createMediaHandlers(cfg) {
     const { storeDir, thumbnailDir } = cfg
 
-    const md5ToPath = (md5) => path.join(storeDir, md5)
-    const thumbToPath = (md5) => path.join(thumbnailDir, `${md5}.jpg`)
+    /** md5 前两位作为分片子目录，避免单目录文件过多；兜底 xx */
+    const shardOf = (md5) => (/^[0-9a-f]{2}/i.test(md5 || '') ? md5.slice(0, 2).toLowerCase() : 'xx')
 
-    /** 将上传文件按 md5 落盘到 store/；同 md5 已存在则跳过 transferTo 让临时文件自动清理 */
+    /** 返回 md5 在 store/ 下的绝对路径（不保证存在）：store/<xx>/<md5> */
+    const md5ToPath = (md5) => path.join(storeDir, shardOf(md5), md5)
+    /** 缩略图同样分片：thumbnails/<xx>/<md5>.jpg */
+    const thumbToPath = (md5) => path.join(thumbnailDir, shardOf(md5), `${md5}.jpg`)
+
+    /** 将上传文件按 md5 落盘到 store/<xx>/；同 md5 已存在则跳过 transferTo 让临时文件自动清理 */
     function persistFile(f) {
         const target = md5ToPath(f.md5)
         if (fs.existsSync(target)) return target
+        fs.mkdirSync(path.dirname(target), { recursive: true })
         return f.transferTo(target)
     }
 
@@ -447,9 +453,10 @@ export function createMediaHandlers(cfg) {
                 etag: true, lastModified: true, cacheControl: 'public, max-age=3600',
             })
         }
-        const ok = ensureVideoThumbnail({ videoPath: filePath, thumbPath: thumbToPath(item.md5) })
+        const thumbPath = thumbToPath(item.md5)
+        const ok = ensureVideoThumbnail({ videoPath: filePath, thumbPath })
         if (!ok) return sendPlaceholder(ctx)
-        return ctx.sendFile(thumbToPath(item.md5), {
+        return ctx.sendFile(thumbPath, {
             download: false, mimeType: 'image/jpeg',
             etag: true, lastModified: true, cacheControl: 'public, max-age=3600',
         })

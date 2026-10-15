@@ -1,6 +1,7 @@
 // ffmpeg / ffprobe 封装：可用性检测 + 视频缩略图懒生成 + 视频元数据探探
 import { spawnSync } from 'node:child_process'
 import * as fs from 'node:fs'
+import * as path from 'node:path'
 
 /**
  * 检测 ffmpeg 是否可用；不可用抛出异常。
@@ -63,6 +64,8 @@ export function probeVideoMeta(filePath) {
 export function ensureVideoThumbnail({ videoPath, thumbPath }) {
     if (fs.existsSync(thumbPath)) return thumbPath
     if (!fs.existsSync(videoPath)) return null
+    // 缩略图目录按 md5 前缀分片，ffmpeg 不会自建父目录，先确保存在
+    try { fs.mkdirSync(path.dirname(thumbPath), { recursive: true }) } catch {}
 
     // 优先 seek 到 3 秒处，取到一帧即可；若视频短于 3 秒则回退到 0。
     const args = [
