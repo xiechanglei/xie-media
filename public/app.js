@@ -1,13 +1,13 @@
-// xie-media 前端交互 v0.3：
-// - 列表页卡片仅承担跳转，操作全部集中在详情页
-// - hash 路由：#/list/<scope>/<type> 列表；#/c/<collectionId> 详情
+// xie-media 前端交互 v0.4：
+// - 列表页卡片仅承担跳转，操作全部集中在详情页；不再按视频/相册分类
+// - hash 路由：#/list/<scope> 列表；#/c/<collectionId> 详情
 // - 无限滚动使用 IntersectionObserver
-// - 详情页：视频集 = 播放器 + 播放列表；相册 = 图/视频网格；item 支持批量重命名/删除/排序 + 追加
+// - 详情页：根据内容自动判定浏览模式（全视频=播放器+列表；否则=平铺网格），可手动切换
+// - item 支持批量重命名/删除/排序 + 追加；上传显示总进度与逐文件状态
 ;(function () {
     const state = {
         // 列表
         scope: 'mine',
-        type: 'all',
         page: 0, pageSize: 24, keyword: '',
         total: 0, list: [], hasMore: true, loading: false,
         // 用户
@@ -16,6 +16,7 @@
         view: 'list',           // 'list' | 'detail'
         // 详情
         detail: null,           // 后端返回的 collection 数据
+        viewMode: 'grid',       // 'list' | 'grid'：当前生效的浏览模式
         detailCurrentIdx: 0,    // 视频集当前播放索引
         itemEditor: null,       // { [itemId]: { name, deleted } } — 仅编辑态使用
         itemEditorOpen: false,
@@ -104,18 +105,14 @@
     // ================= 路由 =================
     function parseHash() {
         const h = (location.hash || '').replace(/^#/, '')
-        if (!h || h === '/') return { view: 'list', scope: 'mine', type: 'all' }
+        if (!h || h === '/') return { view: 'list', scope: 'mine' }
         let m = h.match(/^\/c\/([0-9a-fA-F-]+)$/)
         if (m) return { view: 'detail', id: m[1] }
-        m = h.match(/^\/list\/(mine|plaza|favorites)?(?:\/(all|video|album))?/)
-        if (m) return {
-            view: 'list',
-            scope: m[1] || state.scope || 'mine',
-            type: m[2] || state.type || 'all',
-        }
-        return { view: 'list', scope: state.scope, type: state.type }
+        m = h.match(/^\/list\/(mine|plaza|favorites)?/)
+        if (m) return { view: 'list', scope: m[1] || state.scope || 'mine' }
+        return { view: 'list', scope: state.scope }
     }
-    function buildListHash(scope, type) { return `#/list/${scope || state.scope}/${type || state.type}` }
+    function buildListHash(scope) { return `#/list/${scope || state.scope}` }
     function applyRoute(route) {
         if (route.view === 'detail') {
             state.view = 'detail'
@@ -125,30 +122,26 @@
             loadDetail(route.id)
         } else {
             const scopeChanged = route.scope && route.scope !== state.scope
-            const typeChanged = route.type && route.type !== state.type
             state.view = 'list'
             state.scope = route.scope || state.scope
-            state.type = route.type || state.type
             $('#detailView').classList.add('hidden')
             $('#listView').classList.remove('hidden')
             showTopbarListOnly()
             syncSidebarActive()
             syncUploadBtnVisible()
-            if (scopeChanged || typeChanged || state.list.length === 0) reset()
+            if (scopeChanged || state.list.length === 0) reset()
         }
     }
-    function gotoList(scope, type) {
-        const target = buildListHash(scope || state.scope, type || state.type)
+    function gotoList(scope) {
+        const target = buildListHash(scope || state.scope)
         if (location.hash === target) applyRoute(parseHash()); else location.hash = target
     }
     function gotoDetail(id) { location.hash = `#/c/${id}` }
     function hideTopbarListOnly() {
-        $('#typeTabs').classList.add('hidden')
         $('#searchInput').classList.add('hidden')
         $('#uploadBtn').classList.add('hidden')
     }
     function showTopbarListOnly() {
-        $('#typeTabs').classList.remove('hidden')
         $('#searchInput').classList.remove('hidden')
         syncUploadBtnVisible()
     }
@@ -170,13 +163,8 @@
         $('#overlay').addEventListener('click', closeDrawer)
     }
 
-    // ================= 顶栏（类型 / 搜索 / 登出 / 回顶）=================
+    // ================= 顶栏（搜索 / 登出 / 回顶）=================
     function initTopbar() {
-        $('#typeTabs').addEventListener('click', e => {
-            const t = e.target.closest('.tab'); if (!t) return
-            $$('#typeTabs .tab').forEach(x => x.classList.toggle('active', x === t))
-            gotoList(state.scope, t.dataset.type)
-        })
         let kwTimer
         $('#searchInput').addEventListener('input', e => {
             clearTimeout(kwTimer)
@@ -200,18 +188,14 @@
         $('#grid').innerHTML = ''
         $('#endMsg').classList.add('hidden')
         $('#empty').classList.add('hidden')
-        syncTabsActive()
         load()
-    }
-    function syncTabsActive() {
-        $$('#typeTabs .tab').forEach(x => x.classList.toggle('active', x.dataset.type === state.type))
     }
     async function load() {
         if (state.loading || !state.hasMore) return
         state.loading = true
         $('#loading').classList.remove('hidden')
         const next = state.page + 1
-        const params = new URLSearchParams({ scope: state.scope, type: state.type, page: next, pageSize: state.pageSize })
+        const params = new URLSearchParams({ scope: state.scope, page: next, pageSize: state.pageSize })
         if (state.keyword) params.set('keyword', state.keyword)
         try {
             const j = await api('/api/media?' + params)
@@ -240,11 +224,16 @@
         // 卡片无操作按钮，点击仅跳转详情（收藏/编辑/删除/可见性都在详情页里）
         const card = document.createElement('div'); card.className = 'card'
         card.dataset.id = it.id
-        const kindIcon = it.kind === 'video' ? (it.itemCount > 1 ? '🎞' : '🎬') : '📁'
+        const vCount = it.videoCount || 0, iCount = it.imageCount || 0
+        // 图标：纯图片→🖼；含视频（无图）→单文件🎬/多文件🎞；图片+视频混装→📁
+        let kindIcon
+        if (vCount > 0 && iCount > 0) kindIcon = '📁'
+        else if (vCount > 0) kindIcon = (vCount > 1 ? '🎞' : '🎬')
+        else kindIcon = '🖼'
         const meta = []
         meta.push(`<span class="badge ${it.visibility}">${it.visibility === 'public' ? '公开' : '私有'}</span>`)
-        if (it.kind === 'video' && it.itemCount > 1) meta.push(`<span>${it.itemCount} 个视频</span>`)
-        if (it.kind === 'album') meta.push(`<span>${it.itemCount} 项</span>`)
+        if (vCount > 1) meta.push(`<span>${vCount} 视频</span>`)
+        if (iCount > 0) meta.push(`<span>${iCount} 图</span>`)
         if (state.scope !== 'mine' && it.ownerName) meta.push(`<span>@${escapeHtml(it.ownerName)}</span>`)
         if (it.category) meta.push(`<span>#${escapeHtml(it.category)}</span>`)
         meta.push(`<span>${fmtDate(it.createdAt)}</span>`)
@@ -252,7 +241,7 @@
         card.innerHTML = `
             <div class="cover-wrap">
                 <img class="cover" loading="lazy" alt="" src="${coverUrl(it.id)}">
-                ${it.kind === 'video' && it.agg && it.agg.durationSec ? `<span class="cover-badge dur">${fmtDur(it.agg.durationSec)}</span>` : ''}
+                ${it.agg && it.agg.durationSec ? `<span class="cover-badge dur">${fmtDur(it.agg.durationSec)}</span>` : ''}
             </div>
             <div class="card-body">
                 <div class="card-title" title="${escapeHtml(it.title || '')}">${kindIcon} ${escapeHtml(it.title || '')}</div>
@@ -279,6 +268,11 @@
     }
 
     // ================= 详情页 =================
+    /** 根据内容自动判定浏览模式：全部为视频→'list'（播放器+列表），否则→'grid'（平铺） */
+    function computeViewMode(items) {
+        if (!items || !items.length) return 'grid'
+        return items.every(it => it.mediaType === 'video') ? 'list' : 'grid'
+    }
     async function loadDetail(id) {
         $('#detailBody').innerHTML = '<div class="loading">加载中…</div>'
         $('#detailInfo').innerHTML = ''
@@ -286,6 +280,7 @@
         try {
             const j = await api(`/api/collections/${id}`)
             state.detail = j.data
+            state.viewMode = computeViewMode(j.data.items)
             state.detailCurrentIdx = 0
             state.itemEditorOpen = false
             state.itemAppending = false
@@ -299,11 +294,14 @@
         const d = state.detail; if (!d) return
         const canMutate = state.user && (d.ownerId === state.user.id || state.user.role === 'admin')
 
-        // 顶部信息
-        const kindLabel = d.kind === 'video'
-            ? (d.itemCount === 1 ? '视频' : `视频集 · ${d.items.length} 个`)
-            : `相册 · ${d.items.length} 项`
-        const agg = d.kind === 'video' ? aggOfItems(d.items) : null
+        // 顶部信息（不再区分 kind，改用视频/图片数量描述）
+        const vCount = d.items.filter(it => it.mediaType === 'video').length
+        const iCount = d.items.filter(it => it.mediaType === 'image').length
+        const parts = []
+        if (vCount) parts.push(vCount > 1 ? `${vCount} 个视频` : '1 个视频')
+        if (iCount) parts.push(`${iCount} 张图片`)
+        const kindLabel = parts.join(' · ') || `${d.items.length} 项`
+        const agg = vCount ? aggOfItems(d.items.filter(it => it.mediaType === 'video')) : null
         const aggBits = []
         if (agg) {
             if (agg.durationSec) aggBits.push(`<span>⏱ ${fmtDur(agg.durationSec)}</span>`)
@@ -324,8 +322,9 @@
         ]
         $('#detailInfo').innerHTML = infoBits.join('')
 
-        // 顶部动作按钮
+        // 顶部动作按钮（浏览模式切换任何人都可用，故先于权限判断加入）
         const acts = []
+        acts.push(`<button class="mini-btn" data-act="view" type="button" title="切换浏览方式">${state.viewMode === 'list' ? '▦ 平铺' : '☰ 列表'}</button>`)
         acts.push(`<button class="mini-btn fav ${d.favorited ? 'fav-active' : ''}" data-act="fav" type="button">${d.favorited ? '★ 已收藏' : '☆ 收藏'}</button>`)
         if (canMutate) {
             acts.push(`<button class="mini-btn" data-act="vis" type="button">${d.visibility === 'public' ? '转私有' : '开放到广场'}</button>`)
@@ -335,7 +334,7 @@
         }
         $('#detailActions').innerHTML = acts.join('')
 
-        // 主体：video / album
+        // 主体：按当前浏览模式
         renderDetailBody()
 
         // 绑定动作
@@ -352,19 +351,20 @@
             body.appendChild(buildItemEditor())
             return
         }
-        if (d.kind === 'video') body.appendChild(buildVideoLayout())
-        else body.appendChild(buildAlbumGrid())
+        // list 模式仅在“含至少一个视频”时有意义；纯图片强制用平铺
+        if (state.viewMode === 'list' && d.items.some(it => it.mediaType === 'video')) {
+            body.appendChild(buildVideoLayout())
+        } else {
+            body.appendChild(buildAlbumGrid())
+        }
     }
 
-    // ---- 视频集布局：大播放器 + 播放列表 ----
+    // ---- 列表布局：大播放器 + 播放列表（主要面向含视频的资源）----
     function buildVideoLayout() {
         const d = state.detail
         const wrap = document.createElement('div'); wrap.className = 'video-layout'
         const stage = document.createElement('div'); stage.className = 'video-stage'
-        const v = document.createElement('video'); v.id = 'detailPlayer'; v.controls = true; v.playsInline = true
-        const first = d.items[state.detailCurrentIdx] || d.items[0]
-        if (first) v.src = itemUrl(first.id)
-        stage.appendChild(v)
+        wrap.appendChild(stage)
 
         const list = document.createElement('div'); list.className = 'video-playlist'
         list.innerHTML = `<header>播放列表 · ${d.items.length} 个</header>`
@@ -374,6 +374,7 @@
             if (i === state.detailCurrentIdx) li.classList.add('active')
             const m = it.meta
             const tags = []
+            if (it.mediaType === 'image') tags.push('图片')
             if (m) {
                 if (m.durationSec) tags.push(fmtDur(m.durationSec))
                 const rl = resLabel(m); if (rl) tags.push(rl)
@@ -385,29 +386,38 @@
             ol.appendChild(li)
         })
         list.appendChild(ol)
+        wrap.appendChild(list)
 
-        wrap.appendChild(stage); wrap.appendChild(list)
+        // 首项放入播放器
+        renderStage(d.items[state.detailCurrentIdx] || d.items[0], stage)
+        return wrap
+    }
 
-        // 尝试自动播放（多数浏览器非用户手势下会拒绝，忽略错误即可）
-        if (first) {
-            v.muted = true
+    /** 在播放器区域渲染当前 item：视频→<video>（不默认静音，尝试自动播放）；图片→<img> */
+    function renderStage(it, stageEl) {
+        const stage = stageEl || $('.video-stage'); if (!stage) return
+        stage.innerHTML = ''
+        if (!it) return
+        if (it.mediaType === 'video') {
+            const v = document.createElement('video'); v.id = 'detailPlayer'; v.controls = true; v.playsInline = true
+            v.src = itemUrl(it.id)
+            stage.appendChild(v)
+            // 不再默认静音；非用户手势下自动播放可能被浏览器拒绝，失败即停在封面等用户点
             const p = v.play(); if (p && p.catch) p.catch(() => { /* autoplay blocked */ })
             v.addEventListener('ended', () => {
                 const next = state.detailCurrentIdx + 1
-                if (next < d.items.length) playAt(next)
+                if (next < state.detail.items.length) playAt(next)
             })
-            v.addEventListener('play', () => { if (!v.muted) return })
+        } else {
+            const im = document.createElement('img'); im.src = itemUrl(it.id); im.alt = it.name || ''
+            im.addEventListener('click', () => openLightbox(state.detail.items, state.detailCurrentIdx))
+            stage.appendChild(im)
         }
-        return wrap
     }
     function playAt(i) {
         const d = state.detail; if (!d || !d.items[i]) return
         state.detailCurrentIdx = i
-        const v = $('#detailPlayer'); if (v) {
-            v.src = itemUrl(d.items[i].id)
-            v.currentTime = 0
-            const p = v.play(); if (p && p.catch) p.catch(() => {})
-        }
+        renderStage(d.items[i])
         const lis = $$('.video-playlist li')
         lis.forEach((li, idx) => li.classList.toggle('active', idx === i))
     }
@@ -453,6 +463,7 @@
     // ---- 详情页动作 ----
     function handleDetailAction(act, btn) {
         const d = state.detail; if (!d) return
+        if (act === 'view') { state.viewMode = state.viewMode === 'list' ? 'grid' : 'list'; renderDetail(); return }
         if (act === 'fav') return toggleFav(d, btn)
         if (act === 'vis') return toggleVis(d)
         if (act === 'edit-meta') return openEditMeta()
@@ -463,12 +474,12 @@
         const wasFav = d.favorited
         try {
             if (wasFav) {
-                const q = new URLSearchParams({ targetType: d.kind, targetId: d.id })
+                const q = new URLSearchParams({ targetId: d.id })
                 await api('/api/favorites?' + q, { method: 'DELETE' })
             } else {
                 await api('/api/favorites', {
                     method: 'POST', headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ targetType: d.kind, targetId: d.id }),
+                    body: JSON.stringify({ targetId: d.id }),
                 })
             }
             d.favorited = !wasFav
@@ -647,9 +658,7 @@
         const append = document.createElement('div'); append.className = 'append-area'
         const appendInput = document.createElement('input')
         appendInput.type = 'file'; appendInput.multiple = true
-        appendInput.accept = d.kind === 'video'
-            ? '.mp4,.webm,.mov,.mkv'
-            : '.mp4,.webm,.mov,.mkv,.jpg,.jpeg,.png,.webp,.gif'
+        appendInput.accept = '.mp4,.webm,.mov,.mkv,.jpg,.jpeg,.png,.webp,.gif'
         const appendBtn = document.createElement('button')
         appendBtn.type = 'button'; appendBtn.className = 'primary'
         appendBtn.textContent = '追加并保存'
@@ -692,8 +701,26 @@
     function initUpload() {
         const files = []
         const drop = $('#dropArea'), input = $('#upFiles'), listEl = $('#fileList')
+        const bar = $('#upBar'), fill = $('#upBarFill'), prog = $('#upProgress')
+        const sepChk = $('#upSeparate')
+        // 逐文件状态：每个文件对应一行，行末一个状态 span
         function refreshList() {
-            listEl.innerHTML = files.map(f => `<div>${escapeHtml(f.name)} · ${fmtSize(f.size)}</div>`).join('')
+            listEl.innerHTML = files.map((f, i) =>
+                `<div class="up-row"><span class="up-name">${escapeHtml(f.name)} · ${fmtSize(f.size)}</span>` +
+                `<span class="up-status" data-i="${i}">待上传</span></div>`).join('')
+        }
+        function setStatus(i, text, cls) {
+            const el = listEl.querySelector(`.up-status[data-i="${i}"]`)
+            if (el) { el.textContent = text; el.className = 'up-status' + (cls ? ' ' + cls : '') }
+        }
+        function setAllStatus(text, cls) {
+            files.forEach((_, i) => setStatus(i, text, cls))
+        }
+        function setProgress(pct) {
+            if (pct == null) { bar.classList.add('hidden'); prog.textContent = ''; return }
+            bar.classList.remove('hidden')
+            fill.style.width = Math.round(pct * 100) + '%'
+            prog.textContent = '上传中 ' + Math.round(pct * 100) + '%'
         }
         function addFiles(fs) { for (const f of fs) files.push(f); refreshList() }
         input.addEventListener('change', () => { addFiles(Array.from(input.files || [])); input.value = '' })
@@ -704,35 +731,108 @@
         $('#uploadBtn').addEventListener('click', () => {
             files.length = 0; refreshList()
             $('#upTitle').value = ''; $('#upCategory').value = ''
-            document.querySelector('input[name="mode"][value="album"]').checked = true
-            $('#upProgress').textContent = ''
+            sepChk.checked = false; $('#upTitle').disabled = false
+            setProgress(null)
             openModal('uploadModal')
         })
+        // 批量模式下每个文件各自建资源，共用标题无意义 → 禁用标题输入
+        sepChk.addEventListener('change', () => {
+            $('#upTitle').disabled = sepChk.checked
+            $('#upTitle').placeholder = sepChk.checked ? '批量模式：各资源使用各文件名' : '留空使用首个文件名'
+        })
 
-        $('#upSubmit').addEventListener('click', async () => {
+        $('#upSubmit').addEventListener('click', () => {
             if (!files.length) return toast('请先选择文件')
-            const mode = (document.querySelector('input[name="mode"]:checked') || {}).value || 'album'
-            if (mode === 'video') {
-                const badIdx = files.findIndex(f => /\.(jpe?g|png|webp|gif)$/i.test(f.name || ''))
-                if (badIdx >= 0) return toast(`视频集不能包含图片：${files[badIdx].name}`)
-            }
+            const btn = $('#upSubmit'); btn.disabled = true
+            if (sepChk.checked) uploadSeparate(btn)
+            else uploadCombined(btn)
+        })
+
+        // 常规：全部文件归为一个资源，单次请求 + 总进度条
+        function uploadCombined(btn) {
             const fd = new FormData()
-            fd.append('mode', mode)
             if ($('#upTitle').value) fd.append('title', $('#upTitle').value)
             if ($('#upCategory').value) fd.append('category', $('#upCategory').value)
             for (const f of files) fd.append('files', f)
-            const btn = $('#upSubmit'); btn.disabled = true
-            $('#upProgress').textContent = '上传中…'
-            try {
-                const r = await fetch('/api/upload', { method: 'POST', body: fd, credentials: 'same-origin' })
-                const j = await r.json().catch(() => ({}))
-                if (!r.ok || j.success === false) throw new Error(j.message || ('HTTP ' + r.status))
-                closeModal('uploadModal'); toast('上传成功')
-                gotoList('mine', 'all')
-                reset()
-            } catch (e) { toast('上传失败：' + e.message) }
-            finally { btn.disabled = false; $('#upProgress').textContent = '' }
-        })
+            setAllStatus('上传中', 'doing'); setProgress(0)
+
+            const xhr = new XMLHttpRequest()
+            xhr.open('POST', '/api/upload', true)
+            xhr.withCredentials = true
+            xhr.upload.onprogress = (e) => { if (e.lengthComputable) setProgress(e.loaded / e.total) }
+            xhr.onload = () => {
+                let j = null
+                try { j = JSON.parse(xhr.responseText) } catch { /* ignore */ }
+                const ok = xhr.status >= 200 && xhr.status < 300 && (!j || j.success !== false)
+                if (ok) {
+                    setProgress(1); setAllStatus('完成', 'done')
+                    closeModal('uploadModal'); toast('上传成功')
+                    gotoList('mine'); reset()
+                } else {
+                    setAllStatus('失败', 'fail')
+                    prog.textContent = ''
+                    toast('上传失败：' + ((j && j.message) || ('HTTP ' + xhr.status)))
+                }
+                btn.disabled = false
+            }
+            xhr.onerror = () => {
+                setAllStatus('失败', 'fail'); prog.textContent = ''
+                toast('上传失败：网络错误'); btn.disabled = false
+            }
+            xhr.send(fd)
+        }
+
+        // 批量模式：逐个文件各发一次 /api/upload，每个文件独立成一个资源；
+        // 每行显示各自真实进度，总进度 = (已完成数 + 当前文件比例) / 总数
+        function uploadSeparate(btn) {
+            const category = $('#upCategory').value
+            const total = files.length
+            let idx = 0, okCount = 0, failCount = 0
+            bar.classList.remove('hidden')
+            fill.style.width = '0%'
+            prog.textContent = `批量上传 0/${total}`
+
+            const next = () => {
+                if (idx >= total) {
+                    btn.disabled = false
+                    fill.style.width = '100%'
+                    prog.textContent = `完成 ${okCount}/${total}` + (failCount ? `，失败 ${failCount}` : '')
+                    if (okCount > 0) {
+                        toast(okCount === total ? `已上传 ${total} 个资源` : `成功 ${okCount}/${total}，部分失败`)
+                        gotoList('mine'); reset()
+                    }
+                    // 全部成功才关弹层；有失败时保留，便于看清哪行标红后重试
+                    if (!failCount) closeModal('uploadModal')
+                    return
+                }
+                const i = idx
+                const f = files[i]
+                const fd = new FormData()
+                if (category) fd.append('category', category)
+                fd.append('files', f)
+                const xhr = new XMLHttpRequest()
+                xhr.open('POST', '/api/upload', true)
+                xhr.withCredentials = true
+                xhr.upload.onprogress = (e) => {
+                    if (!e.lengthComputable) return
+                    const p = e.loaded / e.total
+                    setStatus(i, Math.round(p * 100) + '%', 'doing')
+                    fill.style.width = Math.round(((idx + p) / total) * 100) + '%'
+                    prog.textContent = `批量上传 ${idx}/${total} 已完成`
+                }
+                xhr.onload = () => {
+                    let j = null
+                    try { j = JSON.parse(xhr.responseText) } catch { /* ignore */ }
+                    const ok = xhr.status >= 200 && xhr.status < 300 && (!j || j.success !== false)
+                    if (ok) { okCount++; setStatus(i, '完成', 'done') }
+                    else { failCount++; setStatus(i, '失败', 'fail') }
+                    idx++; next()
+                }
+                xhr.onerror = () => { failCount++; setStatus(i, '失败', 'fail'); idx++; next() }
+                xhr.send(fd)
+            }
+            next()
+        }
     }
 
     // ================= 弹层通用 =================

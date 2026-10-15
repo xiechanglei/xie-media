@@ -3,14 +3,12 @@ import { DatabaseSync } from 'node:sqlite'
 
 let _db = null
 
-// 统一数据模型：collections 表达一个“视频集/相册”，items 是其文件列表。
-// - 单文件视频视为 items 只有 1 行的 video-collection，保持与系列/教程同构。
-// - album-collection 允许 image+video 混装。
-// - favorites 通过 target_id 指向 collections.id。
+// 统一数据模型：collections 表达“一个资源集合”，items 是其文件列表（图片/视频混装，不再区分类型）。
+// - 浏览方式由内容决定：详情页若全部为视频则用“播放器+列表”，否则用“平铺网格”。
+// - favorites 通过 target_id 直接指向 collections.id。
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS collections (
   id            TEXT PRIMARY KEY,
-  kind          TEXT NOT NULL,            -- 'video' | 'album'
   title         TEXT NOT NULL,
   category      TEXT,
   owner_id      TEXT NOT NULL,
@@ -22,7 +20,6 @@ CREATE TABLE IF NOT EXISTS collections (
 CREATE INDEX IF NOT EXISTS idx_collections_owner      ON collections(owner_id);
 CREATE INDEX IF NOT EXISTS idx_collections_visibility ON collections(visibility);
 CREATE INDEX IF NOT EXISTS idx_collections_created    ON collections(created_at DESC);
-CREATE INDEX IF NOT EXISTS idx_collections_kind       ON collections(kind);
 
 CREATE TABLE IF NOT EXISTS items (
   id             TEXT PRIMARY KEY,
@@ -45,13 +42,12 @@ CREATE INDEX IF NOT EXISTS idx_items_md5        ON items(md5);
 CREATE TABLE IF NOT EXISTS favorites (
   id           TEXT PRIMARY KEY,
   user_id      TEXT NOT NULL,
-  target_type  TEXT NOT NULL,             -- 'video' | 'album'（对应 collection.kind）
   target_id    TEXT NOT NULL,             -- collections.id
   created_at   INTEGER NOT NULL,
-  UNIQUE(user_id, target_type, target_id)
+  UNIQUE(user_id, target_id)
 );
 CREATE INDEX IF NOT EXISTS idx_favorites_user   ON favorites(user_id);
-CREATE INDEX IF NOT EXISTS idx_favorites_target ON favorites(target_type, target_id);
+CREATE INDEX IF NOT EXISTS idx_favorites_target ON favorites(target_id);
 `
 
 /**
@@ -64,8 +60,6 @@ export function initDb(dbFile) {
     _db.exec('PRAGMA foreign_keys = ON')
     _db.exec('PRAGMA journal_mode = WAL')
     _db.exec(SCHEMA)
-    // 列级增量迁移（旧库升级）：列已存在时 ALTER 报错，忽略即可
-    try { _db.exec(`ALTER TABLE items ADD COLUMN meta_json TEXT`) } catch { /* 已有该列 */ }
     return _db
 }
 

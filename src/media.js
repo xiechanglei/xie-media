@@ -1,6 +1,7 @@
-// 媒体资源业务逻辑（v0.3 数据模型）：
-// - collections 表达"一个视频集/相册"，items 表达其中的文件；kind='video' 只允许视频，kind='album' 允许图/视频混装。
-// - 上传模式 video 允许 N 个视频文件（系列/教程）；album 允许 N 个混合文件。
+// 媒体资源业务逻辑（v0.4 数据模型）：
+// - collections 表达“一个资源集合”，items 表达其中的文件；不再区分 video/album，图片/视频可任意混装。
+// - 上传不再选择模式：一次提交的 N 个文件（任意图片/视频组合）归为一个集合。
+// - 浏览方式由前端根据内容自动判定（全视频=播放器+列表；否则=平铺），可在详情页手动切换。
 // - 详情页承载收藏/可见性/编辑/删除；item 支持批量重命名/删除/排序 + 追加。
 // - 文件按 md5 命名落 store/，同 md5 复用；删除按引用计数清理。
 // - 缩略图首次访问时懒生成，图片直接原图返回。
@@ -102,31 +103,22 @@ export function createMediaHandlers(cfg) {
         const user = ctx.user
         const q = ctx.query || {}
         const scope = ['mine', 'plaza', 'favorites'].includes(q.scope) ? q.scope : 'mine'
-        const type = ['all', 'video', 'album'].includes(q.type) ? q.type : 'all'
         const page = Math.max(parseInt(q.page, 10) || 1, 1)
         const pageSize = Math.min(Math.max(parseInt(q.pageSize, 10) || 24, 1), 200)
         const keyword = (q.keyword || '').toString().trim().toLowerCase()
 
-        const kindFilter = type === 'all' ? null : type   // 'video' | 'album' | null
-
         let rows
         if (scope === 'mine') {
-            rows = kindFilter
-                ? dbAll(`SELECT * FROM collections WHERE owner_id=? AND kind=? ORDER BY created_at DESC`, user.id, kindFilter)
-                : dbAll(`SELECT * FROM collections WHERE owner_id=? ORDER BY created_at DESC`, user.id)
+            rows = dbAll(`SELECT * FROM collections WHERE owner_id=? ORDER BY created_at DESC`, user.id)
         } else if (scope === 'plaza') {
-            rows = kindFilter
-                ? dbAll(`SELECT * FROM collections WHERE visibility='public' AND kind=? ORDER BY created_at DESC`, kindFilter)
-                : dbAll(`SELECT * FROM collections WHERE visibility='public' ORDER BY created_at DESC`)
+            rows = dbAll(`SELECT * FROM collections WHERE visibility='public' ORDER BY created_at DESC`)
         } else { // favorites
-            const kinds = kindFilter ? [kindFilter] : ['video', 'album']
-            const placeholders = kinds.map(() => '?').join(',')
             rows = dbAll(
                 `SELECT c.* FROM collections c
-                 JOIN favorites f ON f.target_type = c.kind AND f.target_id = c.id
-                 WHERE f.user_id = ? AND c.kind IN (${placeholders})
+                 JOIN favorites f ON f.target_id = c.id
+                 WHERE f.user_id = ?
                  ORDER BY f.created_at DESC`,
-                user.id, ...kinds)
+                user.id)
         }
 
         if (keyword) {
@@ -141,12 +133,21 @@ export function createMediaHandlers(cfg) {
 
         const list = pageRows.map(r => {
             const cnt = dbGet(`SELECT COUNT(*) AS c FROM items WHERE collection_id=?`, r.id).c
-            const fav = dbGet(`SELECT 1 AS x FROM favorites WHERE user_id=? AND target_type=? AND target_id=?`,
-                user.id, r.kind, r.id)
-            // 视频集聚合：总时长 + 最大分辨率（供卡片展示优化）
+            const fav = dbGet(`SELECT 1 AS x FROM favorites WHERE user_id=? AND target_id=?`,
+                user.id, r.id)
+            // 按媒体类型统计数量
+            const typeRows = dbAll(
+                `SELECT media_type, COUNT(*) AS c FROM items WHERE collection_id=? GROUP BY media_type`, r.id)
+            let videoCount = 0, imageCount = 0
+            for (const t of typeRows) {
+                if (t.media_type === 'video') videoCount = t.c
+                else if (t.media_type === 'image') imageCount = t.c
+            }
+            // 含视频则聚合元数据：总时长 + 最大分辨率（供卡片展示优化）
             let agg = null
-            if (r.kind === 'video' && cnt > 0) {
-                const metas = dbAll(`SELECT meta_json FROM items WHERE collection_id=?`, r.id)
+            if (videoCount > 0) {
+                const metas = dbAll(
+                    `SELECT meta_json FROM items WHERE collection_id=? AND media_type='video'`, r.id)
                     .map(x => { try { return x.meta_json ? JSON.parse(x.meta_json) : null } catch { return null } })
                     .filter(Boolean)
                 if (metas.length) {
@@ -161,7 +162,6 @@ export function createMediaHandlers(cfg) {
                 }
             }
             return {
-                kind: r.kind,
                 id: r.id,
                 title: r.title,
                 category: r.category,
@@ -169,6 +169,8 @@ export function createMediaHandlers(cfg) {
                 ownerName: r.owner_name,
                 visibility: r.visibility,
                 itemCount: cnt,
+                videoCount,
+                imageCount,
                 createdAt: r.created_at,
                 updatedAt: r.updated_at,
                 favorited: !!fav,
@@ -183,7 +185,6 @@ export function createMediaHandlers(cfg) {
 
     function upload(ctx) {
         const user = ctx.user
-        const mode = (ctx.body.mode || '').toString()
         const titleInput = (ctx.body.title || '').toString().trim()
         const categoryInput = (ctx.body.category || '').toString().trim() || null
         const files = ctx.files.files || []
@@ -194,25 +195,15 @@ export function createMediaHandlers(cfg) {
             if (!info) throw new Error(`不允许的文件类型：${f.filename}`)
         }
 
-        if (mode !== 'video' && mode !== 'album') throw new Error('mode 必须为 video|album')
-
-        if (mode === 'video') {
-            // 视频集：允许 N 个视频文件；单个也走同一路径；出现图片视为非法
-            for (const { f, info } of classified) {
-                if (info.type !== 'video') throw new Error(`视频集只能包含视频文件：${f.filename}`)
-            }
-        }
-        // album 允许图/视频混装，无额外约束
-
         const collectionId = newId()
         const ts = nowMs()
         const title = titleInput || stripExt(files[0].filename)
 
         tx(() => {
             dbRun(
-                `INSERT INTO collections (id,kind,title,category,owner_id,owner_name,visibility,created_at,updated_at)
-                 VALUES (?,?,?, ?,?,?, 'private', ?, ?)`,
-                collectionId, mode, title, categoryInput, user.id, user.username, ts, ts)
+                `INSERT INTO collections (id,title,category,owner_id,owner_name,visibility,created_at,updated_at)
+                 VALUES (?,?,?,?,?, 'private', ?, ?)`,
+                collectionId, title, categoryInput, user.id, user.username, ts, ts)
             files.forEach((f, i) => {
                 const { info } = classified[i]
                 const finalPath = persistFile(f)
@@ -227,7 +218,7 @@ export function createMediaHandlers(cfg) {
         })
 
         return {
-            kind: mode, id: collectionId, title, category: categoryInput,
+            id: collectionId, title, category: categoryInput,
             visibility: 'private', itemCount: files.length,
         }
     }
@@ -247,10 +238,10 @@ export function createMediaHandlers(cfg) {
             `SELECT id,md5,ext,original_name,name,mime,size,media_type,sort_order,meta_json
              FROM items WHERE collection_id=? ORDER BY sort_order ASC`, row.id)
         const fav = dbGet(
-            `SELECT 1 AS x FROM favorites WHERE user_id=? AND target_type=? AND target_id=?`,
-            ctx.user.id, row.kind, row.id)
+            `SELECT 1 AS x FROM favorites WHERE user_id=? AND target_id=?`,
+            ctx.user.id, row.id)
         return {
-            kind: row.kind, id: row.id, title: row.title, category: row.category,
+            id: row.id, title: row.title, category: row.category,
             ownerId: row.owner_id, ownerName: row.owner_name, visibility: row.visibility,
             createdAt: row.created_at, updatedAt: row.updated_at,
             favorited: !!fav,
@@ -288,7 +279,7 @@ export function createMediaHandlers(cfg) {
         tx(() => {
             dbRun(`DELETE FROM items WHERE collection_id=?`, row.id)
             dbRun(`DELETE FROM collections WHERE id=?`, row.id)
-            dbRun(`DELETE FROM favorites WHERE target_type=? AND target_id=?`, row.kind, row.id)
+            dbRun(`DELETE FROM favorites WHERE target_id=?`, row.id)
         })
         for (const it of items) cleanupMd5IfUnreferenced(it.md5)
         return { deleted: row.id }
@@ -359,9 +350,6 @@ export function createMediaHandlers(cfg) {
         const classified = files.map(f => ({ f, info: classifyFile(f) }))
         for (const { f, info } of classified) {
             if (!info) throw new Error(`不允许的文件类型：${f.filename}`)
-            if (row.kind === 'video' && info.type !== 'video') {
-                throw new Error(`视频集只能追加视频文件：${f.filename}`)
-            }
         }
 
         const max = dbGet(`SELECT COALESCE(MAX(sort_order), -1) AS m FROM items WHERE collection_id=?`, row.id).m
@@ -387,25 +375,23 @@ export function createMediaHandlers(cfg) {
     // ===================== 收藏 =====================
 
     function addFavorite(ctx) {
-        const targetType = (ctx.body.targetType || '').toString()
         const targetId = (ctx.body.targetId || '').toString()
-        if (!['video', 'album'].includes(targetType)) throw new Error('targetType 必须为 video|album')
+        if (!targetId) throw new Error('targetId 必填')
         const row = dbGet(`SELECT * FROM collections WHERE id=?`, targetId)
         if (!row) throw new Error('目标不存在')
         if (!canRead(ctx.user, row)) throw new Error('无权访问该资源')
         dbRun(
-            `INSERT OR IGNORE INTO favorites (id,user_id,target_type,target_id,created_at) VALUES (?,?,?,?,?)`,
-            newId(), ctx.user.id, targetType, targetId, nowMs())
-        return { favorited: true, targetType, targetId }
+            `INSERT OR IGNORE INTO favorites (id,user_id,target_id,created_at) VALUES (?,?,?,?)`,
+            newId(), ctx.user.id, targetId, nowMs())
+        return { favorited: true, targetId }
     }
 
     function removeFavorite(ctx) {
-        const targetType = (ctx.body.targetType ?? ctx.query.targetType ?? '').toString()
         const targetId = (ctx.body.targetId ?? ctx.query.targetId ?? '').toString()
-        if (!['video', 'album'].includes(targetType)) throw new Error('targetType 必须为 video|album')
-        dbRun(`DELETE FROM favorites WHERE user_id=? AND target_type=? AND target_id=?`,
-            ctx.user.id, targetType, targetId)
-        return { favorited: false, targetType, targetId }
+        if (!targetId) throw new Error('targetId 必填')
+        dbRun(`DELETE FROM favorites WHERE user_id=? AND target_id=?`,
+            ctx.user.id, targetId)
+        return { favorited: false, targetId }
     }
 
     // ===================== 文件与缩略图 =====================

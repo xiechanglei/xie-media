@@ -32,12 +32,8 @@
     <div class="main">
         <header class="topbar">
             <button id="menuToggle" class="menu-toggle" type="button" aria-label="菜单">☰</button>
-            <div class="tabs" id="typeTabs">
-                <button class="tab active" data-type="all" type="button">全部</button>
-                <button class="tab" data-type="video" type="button">视频</button>
-                <button class="tab" data-type="album" type="button">相册</button>
-            </div>
             <input id="searchInput" class="search" type="search" placeholder="搜索标题 / 分类"/>
+            <div class="grow"></div>
             <button id="uploadBtn" class="primary" type="button">＋ 上传</button>
             <button id="backToTop" class="ghost to-top hidden" type="button" title="回到顶部">↑</button>
         </header>
@@ -73,16 +69,16 @@
             <button class="close" data-close="uploadModal" type="button">×</button>
         </div>
         <div class="form-row">
-            <label class="radio"><input type="radio" name="mode" value="video"> 视频集（1 个或多个视频，作为系列/教程）</label>
-            <label class="radio"><input type="radio" name="mode" value="album" checked> 相册（图片 / 视频混装）</label>
-        </div>
-        <div class="form-row">
             <label>标题 <input id="upTitle" type="text" placeholder="留空使用首个文件名"/></label>
             <label>分类 <input id="upCategory" type="text" placeholder="可选，便于搜索"/></label>
+        </div>
+        <div class="form-row">
+            <label class="radio"><input id="upSeparate" type="checkbox"> 批量模式（每个文件单独成为一个资源，逐个上传）</label>
         </div>
         <div id="dropArea" class="drop">拖拽文件到此，或 <label class="filelabel">选择文件<input id="upFiles" type="file" multiple accept=".mp4,.webm,.mov,.mkv,.jpg,.jpeg,.png,.webp,.gif" hidden></label></div>
         <div id="fileList" class="filelist"></div>
         <div class="modal-foot">
+            <div class="up-bar hidden" id="upBar"><div class="up-bar-fill" id="upBarFill"></div></div>
             <span id="upProgress" class="muted"></span>
             <div class="grow"></div>
             <button class="ghost" data-close="uploadModal" type="button">取消</button>
