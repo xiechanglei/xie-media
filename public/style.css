@@ -261,10 +261,11 @@ button.primary:disabled, button.ghost:disabled, button.danger:disabled { opacity
     .sidebar.open { transform: translateX(0); }
     .menu-toggle { display: inline-flex; }
     .main { width: 100%; }
-    .topbar { padding: 8px 12px; gap: 8px; }
-    .tabs .tab { padding: 8px 10px; font-size: 12px; }
-    .search { flex-basis: 100%; order: 5; max-width: none; }
-    #uploadBtn { order: 2; }
+    .topbar { padding: 8px 12px; gap: 8px; flex-wrap: nowrap; }
+    .topbar .grow { display: none; }
+    /* 菜单/搜索/上传保持同一行：搜索框弹性收缩占据中间 */
+    .search { flex: 1 1 0; min-width: 0; max-width: none; }
+    #uploadBtn { flex: 0 0 auto; padding: 8px 10px; white-space: nowrap; }
     .content { padding: 10px; }
     .grid { grid-template-columns: 1fr; gap: 10px; }
     /* 移动端卡片横向排列：封面固定宽度 · 标题/元信息在右 · 操作栏下方通栏 */
