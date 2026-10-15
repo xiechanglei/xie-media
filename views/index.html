@@ -1,0 +1,145 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <meta http-equiv="X-UA-Compatible" content="ie=edge">
+    <title>{{appTitle}}</title>
+    <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+
+<div class="layout">
+    <!-- 左侧抽屉：桌面常显，移动端通过汉堡切换 -->
+    <aside class="sidebar" id="sidebar">
+        <div class="sidebar-brand">{{appTitle}}</div>
+        <nav class="side-nav">
+            <button class="side-item" data-scope="plaza" type="button">🌍 广场</button>
+            <button class="side-item active" data-scope="mine" type="button">📚 我的</button>
+            <button class="side-item" data-scope="favorites" type="button">⭐ 收藏</button>
+        </nav>
+        <div class="sidebar-user">
+            <div class="whoami" id="whoami">加载中…</div>
+            <div class="user-links">
+                <a id="adminLink" href="/auth/manager.html" class="hidden">管理</a>
+                <button id="logoutBtn" class="link-btn" type="button">登出</button>
+            </div>
+        </div>
+    </aside>
+    <div class="overlay" id="overlay"></div>
+
+    <!-- 右侧主区 -->
+    <div class="main">
+        <header class="topbar">
+            <button id="menuToggle" class="menu-toggle" type="button" aria-label="菜单">☰</button>
+            <div class="tabs" id="typeTabs">
+                <button class="tab active" data-type="all" type="button">全部</button>
+                <button class="tab" data-type="video" type="button">视频</button>
+                <button class="tab" data-type="album" type="button">相册</button>
+            </div>
+            <input id="searchInput" class="search" type="search" placeholder="搜索标题 / 分类"/>
+            <button id="uploadBtn" class="primary" type="button">＋ 上传</button>
+            <button id="backToTop" class="ghost to-top hidden" type="button" title="回到顶部">↑</button>
+        </header>
+
+        <!-- 列表视图 -->
+        <main class="content" id="listView">
+            <div id="grid" class="grid"></div>
+            <div id="sentinel" class="sentinel"></div>
+            <div id="loading" class="loading hidden">加载中…</div>
+            <div id="endMsg" class="endmsg hidden">— 已经到底啦 —</div>
+            <div id="empty" class="empty hidden">还没有内容</div>
+        </main>
+
+        <!-- 详情视图（点击卡片后展示；所有资源级操作集中在此）-->
+        <main class="content detail hidden" id="detailView">
+            <div class="detail-header">
+                <button class="ghost back" id="detailBack" type="button">← 返回</button>
+                <div class="grow"></div>
+                <div class="detail-actions" id="detailActions"></div>
+            </div>
+            <div class="detail-info" id="detailInfo"></div>
+            <div class="detail-body" id="detailBody"></div>
+        </main>
+    </div>
+</div>
+
+<!-- 上传弹层 -->
+<div id="uploadModal" class="modal hidden" role="dialog">
+    <div class="modal-mask"></div>
+    <div class="modal-body">
+        <div class="modal-head">
+            <h3>上传</h3>
+            <button class="close" data-close="uploadModal" type="button">×</button>
+        </div>
+        <div class="form-row">
+            <label class="radio"><input type="radio" name="mode" value="video"> 视频集（1 个或多个视频，作为系列/教程）</label>
+            <label class="radio"><input type="radio" name="mode" value="album" checked> 相册（图片 / 视频混装）</label>
+        </div>
+        <div class="form-row">
+            <label>标题 <input id="upTitle" type="text" placeholder="留空使用首个文件名"/></label>
+            <label>分类 <input id="upCategory" type="text" placeholder="可选，便于搜索"/></label>
+        </div>
+        <div id="dropArea" class="drop">拖拽文件到此，或 <label class="filelabel">选择文件<input id="upFiles" type="file" multiple accept=".mp4,.webm,.mov,.mkv,.jpg,.jpeg,.png,.webp,.gif" hidden></label></div>
+        <div id="fileList" class="filelist"></div>
+        <div class="modal-foot">
+            <span id="upProgress" class="muted"></span>
+            <div class="grow"></div>
+            <button class="ghost" data-close="uploadModal" type="button">取消</button>
+            <button id="upSubmit" class="primary" type="button">上传</button>
+        </div>
+    </div>
+</div>
+
+<!-- 编辑资源元信息弹层 -->
+<div id="editModal" class="modal hidden" role="dialog">
+    <div class="modal-mask"></div>
+    <div class="modal-body">
+        <div class="modal-head">
+            <h3>编辑信息</h3>
+            <button class="close" data-close="editModal" type="button">×</button>
+        </div>
+        <div class="form-row">
+            <label>标题 <input id="editTitle" type="text"/></label>
+            <label>分类 <input id="editCategory" type="text"/></label>
+        </div>
+        <div class="modal-foot">
+            <div class="grow"></div>
+            <button class="ghost" data-close="editModal" type="button">取消</button>
+            <button id="editSubmit" class="primary" type="button">保存</button>
+        </div>
+    </div>
+</div>
+
+<!-- 确认弹层 -->
+<div id="confirmModal" class="modal hidden" role="dialog">
+    <div class="modal-mask"></div>
+    <div class="modal-body narrow">
+        <div class="modal-head"><h3>确认</h3></div>
+        <div id="confirmText" class="confirm-text"></div>
+        <div class="modal-foot">
+            <div class="grow"></div>
+            <button class="ghost" data-close="confirmModal" type="button">取消</button>
+            <button id="confirmOk" class="danger" type="button">确定</button>
+        </div>
+    </div>
+</div>
+
+<!-- 大图 / 单视频 弹层：详情页里点击某个 item 时展示；带上下前后按钮 -->
+<div id="lightbox" class="modal hidden" role="dialog">
+    <div class="modal-mask"></div>
+    <div class="lightbox-body">
+        <button class="lb-btn lb-close" data-close="lightbox" type="button">×</button>
+        <button class="lb-btn lb-prev" id="lbPrev" type="button">‹</button>
+        <div id="lbStage" class="lb-stage"></div>
+        <button class="lb-btn lb-next" id="lbNext" type="button">›</button>
+        <div class="lb-caption" id="lbCaption"></div>
+    </div>
+</div>
+
+<div id="toast" class="toast"></div>
+
+<script src="/auth/xie-auth.js" data-required></script>
+<script src="/app.js"></script>
+</body>
+</html>

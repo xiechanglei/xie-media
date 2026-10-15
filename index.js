@@ -1,0 +1,85 @@
+#!/usr/bin/env node
+import { fileURLToPath } from 'node:url'
+import * as path from 'node:path'
+import { createAuthServer } from "@xie-work/xie-auth"
+import { resolveArgs } from "./src/args.js"
+import {
+    APP_TITLE,
+    ALLOWED_EXTENSIONS,
+    UPLOAD_MAX_FILES,
+    UPLOAD_MAX_SIZE,
+} from "./src/config.js"
+import { initStoreDir } from "./src/work-dir.js"
+import { initDb } from "./src/db.js"
+import { assertFfmpegAvailable } from "./src/ffmpeg.js"
+import { createMediaHandlers } from "./src/media.js"
+
+// 解析命令行参数
+const { port, dir } = resolveArgs()
+
+// 初始化工作目录
+const workDir = initStoreDir(dir)
+
+// 打开 SQLite + 建表迁移
+initDb(workDir.dbFile)
+
+// 检测 ffmpeg（强制）
+assertFfmpegAvailable()
+
+// 当前文件所在目录，用于将相对路径解析为绝对路径
+const __filename = fileURLToPath(import.meta.url)
+const __dirname = path.dirname(__filename)
+
+const media = createMediaHandlers({
+    storeDir: workDir.storeDir,
+    thumbnailDir: workDir.thumbnailDir,
+})
+
+// 链式配置：静态资源、视图模板、上传、路由、守卫
+const app = createAuthServer()
+    .title(APP_TITLE)
+    .userStore(path.join(workDir.root, 'users.json'))
+    .static(path.join(__dirname, 'public'))
+    .views(path.join(__dirname, 'views'))
+    .upload(workDir.uploadTempDir, {
+        maxSize: UPLOAD_MAX_SIZE,
+        allowExtensions: ALLOWED_EXTENSIONS,
+        maxFiles: UPLOAD_MAX_FILES,
+    })
+
+    // === 页面（未登录跳转登录页） ===
+    .authGuard('/');
+
+// -------- 主页 --------
+app.use('/', (ctx) => ctx.sendView('index.html', { appTitle: APP_TITLE }))
+
+// -------- 列表 / 上传 --------
+app.useAuth('/api/media', 'GET', media.listMedia)
+app.useAuth('/api/upload', 'POST', media.upload)
+
+// -------- 集合（视频/相册）CRUD --------
+app.useAuth('/api/collections/:id', 'GET', media.getCollection)
+app.useAuth('/api/collections/:id', 'PATCH', media.updateCollection)
+app.useAuth('/api/collections/:id/visibility', 'PATCH', media.updateCollectionVisibility)
+app.useAuth('/api/collections/:id', 'DELETE', media.deleteCollection)
+
+// -------- items 维护（重命名 / 删除 / 排序 / 追加）--------
+app.useAuth('/api/collections/:id/items', 'PATCH', media.patchItems)
+app.useAuth('/api/collections/:id/items', 'POST', media.collectionAddItems)
+
+// -------- 收藏 --------
+app.useAuth('/api/favorites', 'POST', media.addFavorite)
+app.useAuth('/api/favorites', 'DELETE', media.removeFavorite)
+
+// -------- 文件与缩略图（流式 + Range）--------
+app.useAuth('/media/items/:itemId', 'GET,HEAD', media.serveItemFile)
+app.useAuth('/media/thumbnails/items/:itemId', 'GET,HEAD', media.serveItemThumbnail)
+app.useAuth('/media/thumbnails/collections/:id', 'GET,HEAD', media.serveCollectionThumbnail)
+
+// 启动
+app.serve(port)
+
+console.log(`\n  ${APP_TITLE}`)
+console.log(`  dir   : ${workDir.root}`)
+console.log(`  port  : ${port}`)
+console.log(`  ➜  http://localhost:${port}\n`)
