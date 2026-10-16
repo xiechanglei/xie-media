@@ -118,7 +118,7 @@
     </div>
 </div>
 
-<!-- 大图 / 单视频 弹层：详情页里点击某个 item 时展示；带上下前后按钮 -->
+<!-- 大图 / 单视频 弹层：详情页里点击某个 item 时展示；全屏黑底，移动端左右滑动切换，底部显示文件名 -->
 <div id="lightbox" class="modal hidden" role="dialog">
     <div class="modal-mask"></div>
     <div class="lightbox-body">
@@ -126,7 +126,10 @@
         <button class="lb-btn lb-prev" id="lbPrev" type="button">‹</button>
         <div id="lbStage" class="lb-stage"></div>
         <button class="lb-btn lb-next" id="lbNext" type="button">›</button>
-        <div class="lb-caption" id="lbCaption"></div>
+        <div class="lb-foot">
+            <div class="lb-counter" id="lbCounter"></div>
+            <div class="lb-name" id="lbName"></div>
+        </div>
     </div>
 </div>
 

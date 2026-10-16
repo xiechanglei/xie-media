@@ -676,7 +676,7 @@
     }
 
     // ---- Lightbox ----
-    let lbItems = [], lbIndex = 0, touchStartX = 0
+    let lbItems = [], lbIndex = 0
     function openLightbox(items, idx) {
         lbItems = items; lbIndex = idx; renderLb(); openModal('lightbox')
     }
@@ -691,11 +691,13 @@
             const im = document.createElement('img'); im.src = url; im.alt = it.name || ''
             stage.appendChild(im)
         }
-        $('#lbCaption').textContent = `${lbIndex + 1} / ${lbItems.length} · ${it.name || ''}` +
-            (it.meta && it.meta.durationSec ? ` · ${fmtDur(it.meta.durationSec)}` : '')
+        // 底部信息栏：计数 + 文件名
+        const counter = $('#lbCounter'); if (counter) counter.textContent = `${lbIndex + 1} / ${lbItems.length}`
+        const nameEl = $('#lbName'); if (nameEl) nameEl.textContent = it.name || ''
     }
-    function lbPrev() { if (!lbItems.length) return; lbIndex = (lbIndex - 1 + lbItems.length) % lbItems.length; renderLb() }
-    function lbNext() { if (!lbItems.length) return; lbIndex = (lbIndex + 1) % lbItems.length; renderLb() }
+    function lbGo(dir) { if (!lbItems.length) return; lbIndex = (lbIndex + dir + lbItems.length) % lbItems.length; renderLb() }
+    function lbPrev() { lbGo(-1) }
+    function lbNext() { lbGo(1) }
 
     // ---- 详情页动作 ----
     function handleDetailAction(act, btn) {
@@ -1129,12 +1131,44 @@
         })
         $('#lbPrev').addEventListener('click', lbPrev)
         $('#lbNext').addEventListener('click', lbNext)
+        // Lightbox 手势：移动端左右滑动切换，带跟手拖拽反馈（水平意图才拦截，不影响纵向滚动/播放控件）
         const lb = $('#lightbox')
-        lb.addEventListener('touchstart', e => { if (e.touches[0]) touchStartX = e.touches[0].clientX }, { passive: true })
+        let lbTx = 0, lbTy = 0, lbDrag = false
+        lb.addEventListener('touchstart', e => {
+            if (e.touches.length !== 1) return
+            lbTx = e.touches[0].clientX; lbTy = e.touches[0].clientY; lbDrag = false
+        }, { passive: true })
+        lb.addEventListener('touchmove', e => {
+            if (e.touches.length !== 1 || lbItems.length < 2) return
+            const dx = e.touches[0].clientX - lbTx
+            const dy = e.touches[0].clientY - lbTy
+            if (!lbDrag && Math.abs(dx) > 12 && Math.abs(dx) > Math.abs(dy)) lbDrag = true
+            if (lbDrag) {
+                if (e.cancelable) e.preventDefault()
+                const media = $('#lbStage').firstElementChild
+                if (media) { media.style.transition = 'none'; media.style.transform = `translateX(${dx}px)` }
+            }
+        }, { passive: false })
         lb.addEventListener('touchend', e => {
-            const t = e.changedTouches[0]; if (!t) return
-            const dx = t.clientX - touchStartX
-            if (Math.abs(dx) > 60) { if (dx > 0) lbPrev(); else lbNext() }
+            if (!lbDrag) return
+            lbDrag = false
+            const media = $('#lbStage').firstElementChild
+            const dx = (e.changedTouches[0] ? e.changedTouches[0].clientX : lbTx) - lbTx
+            const w = window.innerWidth || 1
+            const thresh = Math.min(90, w * 0.18)
+            if (lbItems.length >= 2 && Math.abs(dx) > thresh) {
+                const dir = dx > 0 ? -1 : 1
+                if (media) { media.style.transition = 'transform .18s ease'; media.style.transform = `translateX(${dir > 0 ? -w : w}px)` }
+                setTimeout(() => lbGo(dir), 130)
+            } else if (media) {
+                media.style.transition = 'transform .2s ease'; media.style.transform = ''
+            }
+        })
+        lb.addEventListener('touchcancel', () => {
+            if (!lbDrag) return
+            lbDrag = false
+            const media = $('#lbStage').firstElementChild
+            if (media) { media.style.transition = 'transform .2s ease'; media.style.transform = '' }
         })
     }
 
