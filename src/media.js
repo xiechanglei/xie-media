@@ -304,6 +304,7 @@ export function createMediaHandlers(cfg) {
         const deletes = Array.isArray(ctx.body.deletes) ? ctx.body.deletes : []
         const order = Array.isArray(ctx.body.order) ? ctx.body.order : null
 
+        const deletedMd5s = []
         tx(() => {
             const ts = nowMs()
             for (const e of edits) {
@@ -318,6 +319,7 @@ export function createMediaHandlers(cfg) {
             for (const id of deletes) {
                 const it = dbGet(`SELECT md5 FROM items WHERE id=? AND collection_id=?`, id, row.id)
                 if (!it) throw new Error(`item 不存在: ${id}`)
+                deletedMd5s.push(it.md5)
                 dbRun(`DELETE FROM items WHERE id=?`, id)
             }
             if (order) {
@@ -330,6 +332,9 @@ export function createMediaHandlers(cfg) {
             }
             dbRun(`UPDATE collections SET updated_at=? WHERE id=?`, nowMs(), row.id)
         })
+
+        // 事务提交后再按引用计数清理 store 文件与缩略图（仍被其他 item 引用则保留；回滚时不会误删）
+        for (const md5 of deletedMd5s) cleanupMd5IfUnreferenced(md5)
 
         return { id: row.id, items: listItemsOf(row.id) }
     }

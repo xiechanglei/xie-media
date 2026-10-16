@@ -892,11 +892,7 @@
                 rerender()
             })
             const delBtn = row.querySelector('[data-act=del]')
-            if (delBtn) delBtn.addEventListener('click', () => {
-                const ok = window.confirm(`删除「${st.name || it.originalName}」？保存后不可恢复。`)
-                if (!ok) return
-                st.deleted = true; rerender()
-            })
+            if (delBtn) delBtn.addEventListener('click', () => { st.deleted = true; rerender() })
             const restoreBtn = row.querySelector('[data-act=restore]')
             if (restoreBtn) restoreBtn.addEventListener('click', () => { st.deleted = false; rerender() })
             return row
