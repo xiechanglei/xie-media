@@ -14,3 +14,8 @@ export const UPLOAD_MAX_FILES = 100
 
 // 单文件大小上限（业务上"不限制"，用一个足够大的值即可）
 export const UPLOAD_MAX_SIZE = '1TB'
+
+// scan 目录自动入库：扫描间隔（毫秒）
+export const SCAN_INTERVAL_MS = 10_000
+// 半传输防护：文件 mtime 距今超过该毫秒数才认定"写完"，可入库
+export const SCAN_MTIME_STABLE_MS = 30_000

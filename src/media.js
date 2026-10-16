@@ -21,12 +21,17 @@ const PLACEHOLDER_SVG = Buffer.from(
 const nowMs = () => Date.now()
 const newId = () => crypto.randomUUID()
 
-/** 依据文件名/扩展名判定媒体类型 */
-function classifyFile(f) {
+/** 依据文件名/扩展名判定媒体类型（导出供 scanner 复用） */
+export function classifyFile(f) {
     const ext = (path.extname(f.filename || '').slice(1) || '').toLowerCase()
     if (VIDEO_EXTENSIONS.includes(ext)) return { type: 'video', ext }
     if (IMAGE_EXTENSIONS.includes(ext)) return { type: 'image', ext }
     return null
+}
+
+/** md5 前两位作为分片子目录，避免单目录文件过多；兜底 xx（导出供 scanner 复用） */
+export function shardOf(md5) {
+    return (/^[0-9a-f]{2}/i.test(md5 || '') ? md5.slice(0, 2).toLowerCase() : 'xx')
 }
 
 /** 资源可读性：public 或 owner 或 admin */
@@ -67,9 +72,6 @@ function mapItemRow(it) {
  */
 export function createMediaHandlers(cfg) {
     const { storeDir, thumbnailDir } = cfg
-
-    /** md5 前两位作为分片子目录，避免单目录文件过多；兜底 xx */
-    const shardOf = (md5) => (/^[0-9a-f]{2}/i.test(md5 || '') ? md5.slice(0, 2).toLowerCase() : 'xx')
 
     /** 返回 md5 在 store/ 下的绝对路径（不保证存在）：store/<xx>/<md5> */
     const md5ToPath = (md5) => path.join(storeDir, shardOf(md5), md5)
@@ -464,7 +466,7 @@ export function createMediaHandlers(cfg) {
 
 // ===================== 小工具 =====================
 
-function stripExt(name) {
+export function stripExt(name) {
     const i = name.lastIndexOf('.')
     return i > 0 ? name.slice(0, i) : name
 }
@@ -473,6 +475,6 @@ const MIME_BY_EXT = {
     mp4: 'video/mp4', webm: 'video/webm', mov: 'video/quicktime', mkv: 'video/x-matroska',
     jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', webp: 'image/webp', gif: 'image/gif',
 }
-function guessMime(ext) {
+export function guessMime(ext) {
     return MIME_BY_EXT[(ext || '').toLowerCase()] || 'application/octet-stream'
 }

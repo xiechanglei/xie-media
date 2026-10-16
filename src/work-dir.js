@@ -5,6 +5,7 @@ import * as path from "node:path";
 const TEMP_UPLOAD_DIR = 'upload_temp'
 const MEDIA_STORE_DIR = 'store'
 const THUMBNAIL_DIR = 'thumbnails'
+const SCAN_DIR = 'scan'
 const DB_FILE = 'media.db'
 
 function ensureDir(p) {
@@ -21,6 +22,7 @@ function ensureDir(p) {
  *   uploadTempDir: string,
  *   storeDir: string,
  *   thumbnailDir: string,
+ *   scanDir: string,
  *   dbFile: string
  * }}
  */
@@ -30,9 +32,11 @@ export const initStoreDir = (dir) => {
     const uploadTempDir = path.join(root, TEMP_UPLOAD_DIR)
     const storeDir = path.join(root, MEDIA_STORE_DIR)
     const thumbnailDir = path.join(root, THUMBNAIL_DIR)
+    const scanDir = path.join(root, SCAN_DIR)
     ensureDir(uploadTempDir)
     ensureDir(storeDir)
     ensureDir(thumbnailDir)
+    ensureDir(scanDir)
     const dbFile = path.join(root, DB_FILE)
-    return { root, uploadTempDir, storeDir, thumbnailDir, dbFile }
+    return { root, uploadTempDir, storeDir, thumbnailDir, scanDir, dbFile }
 }

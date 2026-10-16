@@ -13,6 +13,7 @@ import { initStoreDir } from "./src/work-dir.js"
 import { initDb } from "./src/db.js"
 import { assertFfmpegAvailable } from "./src/ffmpeg.js"
 import { createMediaHandlers } from "./src/media.js"
+import { createScanner } from "./src/scanner.js"
 
 // 解析命令行参数
 const { port, dir } = resolveArgs()
@@ -79,7 +80,16 @@ app.useAuth('/media/thumbnails/collections/:id', 'GET,HEAD', media.serveCollecti
 // 启动
 app.serve(port)
 
+// scan 目录自动入库扫描器（每 10s 一轮）
+const scanner = createScanner({
+    storeDir: workDir.storeDir,
+    scanDir: workDir.scanDir,
+    usersFile: path.join(workDir.root, 'users.json'),
+})
+scanner.start()
+
 console.log(`\n  ${APP_TITLE}`)
 console.log(`  dir   : ${workDir.root}`)
+console.log(`  scan  : ${workDir.scanDir}`)
 console.log(`  port  : ${port}`)
 console.log(`  ➜  http://localhost:${port}\n`)
