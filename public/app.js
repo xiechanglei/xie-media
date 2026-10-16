@@ -240,6 +240,7 @@
             $('#listView').classList.add('hidden')
             $('#detailView').classList.remove('hidden')
             hideTopbarListOnly()
+            syncSelectUI() // 详情页需隐藏“选择”按钮（state.view 已置为 detail）
             loadDetail(route.id)
         } else {
             const scopeChanged = route.scope && route.scope !== state.scope
@@ -596,8 +597,10 @@
         } else {
             body.appendChild(buildAlbumGrid())
         }
-        // 绑定主体区动作（view / vis / edit-items / del）
-        body.querySelectorAll('button[data-act]').forEach(btn => {
+        // 绑定主体区动作（view / vis / edit-items / del）——仅限顶部操作条，
+        // 避免波及 item 编辑器行内的同名 data-act="del" 按钮（否则删单个文件会误触发删整个资源）
+        const barEl = body.querySelector('.body-toolbar')
+        if (barEl) barEl.querySelectorAll('button[data-act]').forEach(btn => {
             btn.addEventListener('click', () => handleDetailAction(btn.dataset.act, btn))
         })
     }
@@ -888,7 +891,8 @@
                 ;[d.items[idxInArray], d.items[next]] = [d.items[next], d.items[idxInArray]]
                 rerender()
             })
-            row.querySelector('[data-act=del]').addEventListener('click', () => {
+            const delBtn = row.querySelector('[data-act=del]')
+            if (delBtn) delBtn.addEventListener('click', () => {
                 const ok = window.confirm(`删除「${st.name || it.originalName}」？保存后不可恢复。`)
                 if (!ok) return
                 st.deleted = true; rerender()
