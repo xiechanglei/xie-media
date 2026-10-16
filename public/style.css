@@ -139,8 +139,13 @@ button.primary:disabled, button.ghost:disabled, button.danger:disabled { opacity
 .item-row .drag-handle { cursor: grab; }
 .up-handle { display: inline-flex; align-items: center; flex: 0 0 auto; cursor: grab; touch-action: none; user-select: none; color: var(--muted); }
 .up-handle:active { cursor: grabbing; }
-/* 拖动中的行必须忽略指针命中：否则 elementFromPoint 永远命中被拖行自身，无法与目标行交换 */
-.is-dragging { opacity: .65; background: var(--primary-soft); border-radius: 8px; pointer-events: none; }
+/* 拖动中的行：脱流成浮卡跟随指针（left/top 由 JS 内联控制），其余行由 FLIP 动画平滑让位 */
+.is-dragging {
+    position: fixed; z-index: 300; margin: 0; box-sizing: border-box;
+    background: #fff; box-shadow: 0 10px 24px rgba(0,0,0,.18);
+    opacity: .96; transform: scale(1.02); pointer-events: none;
+    border-radius: 8px; cursor: grabbing;
+}
 
 /* ============ 弹层 ============ */
 .modal { position: fixed; inset: 0; z-index: 100; display: flex; align-items: center; justify-content: center; }
