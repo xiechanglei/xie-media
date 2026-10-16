@@ -21,6 +21,9 @@
         itemEditor: null,       // { [itemId]: { name, deleted } } — 仅编辑态使用
         itemEditorOpen: false,
         itemAppending: false,
+        // 多选合并（仅列表页·我的）
+        selectMode: false,
+        selected: new Set(),    // Set<String(collectionId)>
     }
 
     const $ = (sel) => document.querySelector(sel)
@@ -231,6 +234,7 @@
     }
     function applyRoute(route) {
         if (route.view === 'detail') {
+            if (state.selectMode) exitSelectMode(false) // 进详情前先退出多选态
             state.view = 'detail'
             if (!$('#detailView').classList.contains('hidden')) stopDetailPlayback() // 详情 A → 详情 B 也先销毁旧播放器
             $('#listView').classList.add('hidden')
@@ -242,11 +246,13 @@
             if (state.view === 'detail') stopDetailPlayback()
             state.view = 'list'
             state.scope = route.scope || state.scope
+            if (scopeChanged && state.selectMode) exitSelectMode(false) // 切范围时清理选择态
             $('#detailView').classList.add('hidden')
             $('#listView').classList.remove('hidden')
             showTopbarListOnly()
             syncSidebarActive()
             syncUploadBtnVisible()
+            syncSelectUI()
             if (scopeChanged || state.list.length === 0) reset()
         }
     }
@@ -271,7 +277,7 @@
         $$('.side-item').forEach(x => x.classList.toggle('active', x.dataset.scope === state.scope))
     }
     function syncUploadBtnVisible() {
-        $('#uploadBtn').classList.toggle('hidden', state.scope !== 'mine' || state.view !== 'list')
+        $('#uploadBtn').classList.toggle('hidden', state.scope !== 'mine' || state.view !== 'list' || state.selectMode)
     }
     function closeDrawer() { $('#sidebar').classList.remove('open'); $('#overlay').classList.remove('show') }
     function openDrawer() { $('#sidebar').classList.add('open'); $('#overlay').classList.add('show') }
@@ -327,6 +333,7 @@
             state.hasMore = state.list.length < state.total
             renderAppend(newList)
             $('#endMsg').classList.toggle('hidden', state.hasMore || state.list.length === 0)
+            if (state.selectMode) updateSelectBar()
             const emptyEl = $('#empty')
             if (state.list.length === 0) {
                 emptyEl.classList.remove('hidden')
@@ -368,8 +375,114 @@
                 <div class="card-title" title="${escapeHtml(it.title || '')}"><span class="kind-ic">${kindIcon}</span> ${escapeHtml(it.title || '')}</div>
                 <div class="card-meta">${meta.join('')}</div>
             </div>`
-        card.addEventListener('click', () => gotoDetail(it.id))
+        if (state.selectMode) {
+            const chk = document.createElement('span'); chk.className = 'select-check'; chk.innerHTML = icon('check', 14)
+            card.appendChild(chk)
+            if (state.selected.has(String(it.id))) card.classList.add('selected')
+            card.addEventListener('click', () => toggleSelect(it.id))
+        } else {
+            card.addEventListener('click', () => gotoDetail(it.id))
+        }
         return card
+    }
+
+    // ================= 多选合并 =================
+    /** 重绘整个当前列表网格（根据 selectMode 决定卡片行为）*/
+    function rerenderGrid() {
+        const grid = $('#grid')
+        grid.innerHTML = ''
+        for (const it of state.list) grid.appendChild(renderCard(it))
+    }
+    /** 同步选择相关按钮/操作栏可见性 */
+    function syncSelectUI() {
+        const inMineList = state.scope === 'mine' && state.view === 'list'
+        $('#selectBtn').classList.toggle('hidden', state.selectMode || !inMineList)
+        $('#selectBar').classList.toggle('hidden', !state.selectMode)
+        document.body.classList.toggle('has-select-bar', state.selectMode)
+        updateSelectBar()
+    }
+    function updateSelectBar() {
+        const n = state.selected.size
+        $('#selCount').textContent = `已选 ${n} 项`
+        $('#selMerge').disabled = n < 2
+        const allSel = state.list.length > 0 && state.list.every(x => state.selected.has(String(x.id)))
+        $('#selSelectAll').textContent = allSel ? '清空' : '全选'
+    }
+    function enterSelectMode() {
+        state.selectMode = true
+        state.selected.clear()
+        rerenderGrid()
+        syncSelectUI()
+    }
+    /** 退出选择模式；rerender=false 时不重绘网格（留给 reset() 接手）*/
+    function exitSelectMode(rerender = true) {
+        state.selectMode = false
+        state.selected.clear()
+        if (rerender) rerenderGrid()
+        syncSelectUI()
+    }
+    function toggleSelect(id) {
+        const key = String(id)
+        const card = $(`#grid .card[data-id="${id}"]`)
+        if (state.selected.has(key)) {
+            state.selected.delete(key)
+            if (card) { card.classList.remove('selected'); const c = card.querySelector('.select-check'); if (c) c.remove() }
+        } else {
+            state.selected.add(key)
+            if (card) {
+                card.classList.add('selected')
+                if (!card.querySelector('.select-check')) {
+                    const chk = document.createElement('span'); chk.className = 'select-check'; chk.innerHTML = icon('check', 14)
+                    card.appendChild(chk)
+                }
+            }
+        }
+        updateSelectBar()
+    }
+    function toggleSelectAll() {
+        const allSel = state.list.length > 0 && state.list.every(x => state.selected.has(String(x.id)))
+        state.selected.clear()
+        if (!allSel) for (const it of state.list) state.selected.add(String(it.id))
+        rerenderGrid()
+        updateSelectBar()
+    }
+    /** 按列表展示顺序取选中的 id（非选择点击顺序，保证可预测的归并顺序）*/
+    function selectedIdsInOrder() {
+        return state.list.filter(x => state.selected.has(String(x.id))).map(x => x.id)
+    }
+    function openMergeModal() {
+        const ids = selectedIdsInOrder()
+        if (ids.length < 2) return toast('请至少选择 2 个资源')
+        const picked = state.list.filter(x => ids.includes(x.id))
+        $('#mergeSummary').innerHTML = `将合并以下 <b>${ids.length}</b> 个资源：<ul>` +
+            picked.map(x => `<li>${escapeHtml(x.title || '')} · ${(x.itemCount || 0)} 项</li>`).join('') + `</ul>`
+        $('#mergeTitle').value = ''
+        $('#mergeCategory').value = ''
+        openModal('mergeModal')
+    }
+    async function doMerge() {
+        const ids = selectedIdsInOrder()
+        if (ids.length < 2) return toast('请至少选择 2 个资源')
+        const btn = $('#mergeSubmit'); btn.disabled = true
+        try {
+            await api('/api/collections/merge', {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ ids, title: $('#mergeTitle').value, category: $('#mergeCategory').value }),
+            })
+            closeModal('mergeModal')
+            exitSelectMode(false)
+            toast(`已合并 ${ids.length} 个资源`)
+            gotoList('mine'); reset()
+        } catch (e) {
+            toast('合并失败：' + e.message)
+        } finally { btn.disabled = false }
+    }
+    function initSelection() {
+        $('#selectBtn').addEventListener('click', enterSelectMode)
+        $('#selCancel').addEventListener('click', () => exitSelectMode())
+        $('#selSelectAll').addEventListener('click', toggleSelectAll)
+        $('#selMerge').addEventListener('click', openMergeModal)
+        $('#mergeSubmit').addEventListener('click', doMerge)
     }
 
     // ================= 无限滚动 =================
@@ -1031,6 +1144,7 @@
         initSidebar()
         initTopbar()
         initUpload()
+        initSelection()
         initModals()
         initInfiniteScroll()
         window.addEventListener('hashchange', () => applyRoute(parseHash()))

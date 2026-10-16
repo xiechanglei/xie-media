@@ -374,6 +374,80 @@ export function createMediaHandlers(cfg) {
         return { id: row.id, items: listItemsOf(row.id) }
     }
 
+    // ===================== 集合合并（多选归并）=====================
+
+    /**
+     * 将多个资源（collections）归并为一个新资源：所有 items 按选中顺序迁入新集合，
+     * 源集合连同其 favorites 一并删除；文件按 md5 存储、items 只是换 collection_id，磁盘文件不受影响。
+     * 收藏关系迁移到新集合（任一源被收藏过 → 新集合对该用户收藏）。
+     * 请求体：{ ids: [collectionId, ...], title?, category? }
+     */
+    function mergeCollections(ctx) {
+        const user = ctx.user
+        const rawIds = Array.isArray(ctx.body.ids) ? ctx.body.ids.map(x => String(x)) : []
+        const ids = [...new Set(rawIds)]
+        if (ids.length < 2) throw new Error('请至少选择 2 个资源进行合并')
+
+        const titleInput = (ctx.body.title || '').toString().trim()
+        const categoryInput = ctx.body.category === undefined || ctx.body.category === null
+            ? null
+            : ((ctx.body.category || '').toString().trim() || null)
+
+        // 校验每个源集合存在且可写（owner 或 admin）
+        const rows = []
+        for (const id of ids) {
+            const row = dbGet(`SELECT * FROM collections WHERE id=?`, id)
+            if (!row) throw new Error(`资源不存在: ${id}`)
+            if (!canMutate(user, row)) throw new Error('无权合并（含非本人资源）')
+            rows.push(row)
+        }
+
+        const newCollectionId = newId()
+        const ts = nowMs()
+        const title = titleInput || rows[0].title
+
+        let movedCount = 0
+        tx(() => {
+            dbRun(
+                `INSERT INTO collections (id,title,category,owner_id,owner_name,visibility,created_at,updated_at)
+                 VALUES (?,?,?,?,?, 'private', ?, ?)`,
+                newCollectionId, title, categoryInput, user.id, user.username, ts, ts)
+
+            // 按 ids 顺序、各集合内 sort_order 顺序迁入
+            let order = 0
+            for (const row of rows) {
+                const items = dbAll(
+                    `SELECT id FROM items WHERE collection_id=? ORDER BY sort_order ASC`, row.id)
+                for (const it of items) {
+                    dbRun(`UPDATE items SET collection_id=?, sort_order=? WHERE id=?`,
+                        newCollectionId, order, it.id)
+                    order++
+                }
+            }
+            movedCount = order
+
+            // 收藏迁移：任一源集合的收藏者 → 收藏新集合
+            const marks = ids.map(() => '?').join(',')
+            const favUsers = dbAll(
+                `SELECT DISTINCT user_id FROM favorites WHERE target_id IN (${marks})`, ...ids)
+            for (const f of favUsers) {
+                dbRun(`INSERT OR IGNORE INTO favorites (id,user_id,target_id,created_at) VALUES (?,?,?,?)`,
+                    newId(), f.user_id, newCollectionId, ts)
+            }
+
+            // 删除源集合及其收藏指向（items 已迁走，不会留下孤立行）
+            for (const row of rows) {
+                dbRun(`DELETE FROM favorites WHERE target_id=?`, row.id)
+                dbRun(`DELETE FROM collections WHERE id=?`, row.id)
+            }
+        })
+
+        return {
+            id: newCollectionId, title, category: categoryInput,
+            visibility: 'private', itemCount: movedCount, mergedFrom: ids.length,
+        }
+    }
+
     // ===================== 收藏 =====================
 
     function addFavorite(ctx) {
@@ -458,7 +532,7 @@ export function createMediaHandlers(cfg) {
     return {
         listMedia, upload,
         getCollection, updateCollection, updateCollectionVisibility, deleteCollection,
-        patchItems, collectionAddItems,
+        patchItems, collectionAddItems, mergeCollections,
         addFavorite, removeFavorite,
         serveItemFile, serveCollectionThumbnail, serveItemThumbnail,
     }

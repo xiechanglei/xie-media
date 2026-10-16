@@ -58,6 +58,9 @@ app.use('/', (ctx) => ctx.sendView('index.html', { appTitle: APP_TITLE }))
 app.useAuth('/api/media', 'GET', media.listMedia)
 app.useAuth('/api/upload', 'POST', media.upload)
 
+// -------- 集合合并（多选归并；须在 :id 之前注册，避免 merge 被当作 :id）--------
+app.useAuth('/api/collections/merge', 'POST', media.mergeCollections)
+
 // -------- 集合（视频/相册）CRUD --------
 app.useAuth('/api/collections/:id', 'GET', media.getCollection)
 app.useAuth('/api/collections/:id', 'PATCH', media.updateCollection)

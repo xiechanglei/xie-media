@@ -35,6 +35,7 @@
             <button id="detailBack" class="ghost back hidden" type="button"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg><span>返回</span></button>
             <input id="searchInput" class="search" type="search" placeholder="搜索标题 / 分类"/>
             <div class="grow"></div>
+            <button id="selectBtn" class="ghost hidden" type="button" title="多选合并">选择</button>
             <button id="uploadBtn" class="primary" type="button">＋ 上传</button>
             <button id="backToTop" class="ghost to-top hidden" type="button" title="回到顶部">↑</button>
         </header>
@@ -130,6 +131,37 @@
 </div>
 
 <div id="toast" class="toast"></div>
+
+<!-- 多选模式底部操作栏：仅在列表页选择模式显示 -->
+<div id="selectBar" class="select-bar hidden">
+    <span class="sel-count" id="selCount">已选 0 项</span>
+    <button id="selSelectAll" class="mini-btn" type="button">全选</button>
+    <div class="grow"></div>
+    <button id="selCancel" class="ghost" type="button">取消</button>
+    <button id="selMerge" class="primary" type="button" disabled>合并所选</button>
+</div>
+
+<!-- 合并弹层：确认将选中的多个资源归并为一个新资源 -->
+<div id="mergeModal" class="modal hidden" role="dialog">
+    <div class="modal-mask"></div>
+    <div class="modal-body">
+        <div class="modal-head">
+            <h3>合并资源</h3>
+            <button class="close" data-close="mergeModal" type="button">×</button>
+        </div>
+        <div class="merge-summary" id="mergeSummary"></div>
+        <div class="form-row">
+            <label>新资源标题 <input id="mergeTitle" type="text" placeholder="留空使用首个资源标题"/></label>
+            <label>分类 <input id="mergeCategory" type="text" placeholder="可选，便于搜索"/></label>
+        </div>
+        <div class="merge-warn">合并后所有文件将归入一个新资源，被选中的源资源将被删除（文件不会丢失）。</div>
+        <div class="modal-foot">
+            <div class="grow"></div>
+            <button class="ghost" data-close="mergeModal" type="button">取消</button>
+            <button id="mergeSubmit" class="primary" type="button">确定合并</button>
+        </div>
+    </div>
+</div>
 
 <script src="/auth/xie-auth.js" data-required></script>
 <script src="/app.js"></script>
