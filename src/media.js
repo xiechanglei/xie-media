@@ -121,6 +121,10 @@ export function createMediaHandlers(cfg) {
                  WHERE f.user_id = ?
                  ORDER BY f.created_at DESC`,
                 user.id)
+            // 已被转私有的他人资源不再展示（与 canRead 同规则）；收藏记录保留，重新公开后自动回到收藏列表
+            if (user.role !== 'admin') {
+                rows = rows.filter(r => r.visibility === 'public' || r.owner_id === user.id)
+            }
         }
 
         if (keyword) {
