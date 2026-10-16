@@ -186,7 +186,6 @@ export function createMediaHandlers(cfg) {
     // ===================== 上传（创建新 collection）=====================
 
     async function upload(ctx) {
-        console.log("received upload request")
         const user = ctx.user
         const titleInput = (ctx.body.title || '').toString().trim()
         const categoryInput = (ctx.body.category || '').toString().trim() || null

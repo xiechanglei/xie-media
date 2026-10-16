@@ -117,7 +117,12 @@ button.primary:disabled, button.ghost:disabled, button.danger:disabled { opacity
 }
 .card-body { padding: 10px 12px; display: flex; flex-direction: column; gap: 4px; }
 .card-title { font-size: 14px; font-weight: 500; white-space: nowrap; text-overflow: ellipsis; overflow: hidden; }
+/* 标题尾部追加的分类：弱化字色小一号，不挣标题视觉主体 */
+.card-title .title-cat { font-size: 12px; font-weight: 400; color: var(--muted); }
 .card-meta { font-size: 12px; color: var(--muted); display: flex; gap: 6px; flex-wrap: wrap; }
+/* 列表描述行最右侧的收藏心形（与详情页同配色：灰空心/红实心） */
+.card-meta .fav-ic { display: inline-flex; align-items: center; color: #c3c7cc; }
+.card-meta .fav-ic.on { color: #e0566b; }
 .badge { padding: 1px 6px; border-radius: 4px; background: var(--bg); color: var(--muted); font-size: 11px; }
 .badge.public { background: #d9ecd0; color: #3e7a34; }
 .badge.private { background: #f4dede; color: #9a3c3c; }
@@ -343,19 +348,21 @@ body.has-select-bar .content { padding-bottom: 72px; }
     .search { flex: 1 1 0; min-width: 0; max-width: none; }
     #uploadBtn { flex: 0 0 auto; padding: 8px 10px; white-space: nowrap; }
     .content { padding: 10px; }
-    /* 移动端双列小卡 */
-    .grid { grid-template-columns: repeat(2, 1fr); gap: 8px; }
-    /* 移动端卡片：标题浮动在缩略图底部（白字 · 半透黑底）· 只显示标题 */
-    .card { position: relative; }
-    .card .card-body { position: absolute; left: 0; right: 0; bottom: 0; padding: 0; gap: 0; }
-    .card .card-title { color: #fff; background: rgba(0,0,0,.55); font-size: 12px; padding: 4px 8px; }
-    .card .card-meta { display: none; }
-    /* 双列小卡标题前的类型 emoji 隐藏（桌面端保留） */
+    /* 移动端单列列表：不显示封面，仅标题 + 一行描述信息；左侧主色竖条点缀 */
+    .grid { grid-template-columns: 1fr; gap: 8px; }
+    .card { border-left: 2px solid var(--primary); border-radius: 0; }
+    .card .cover-wrap { display: none; }
+    .card .card-body { padding: 12px; gap: 8px; min-width: 0; }
+    /* 标题：字号更大，可折行最多两行（移动端特例，桌面端仍单行省略） */
+    .card .card-title { font-size: 16px; background: none; color: inherit; padding: 0; white-space: normal; word-break: break-all; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
+    /* 描述行：徽章与文字同行，行内元素纵向居中对齐 */
+    .card .card-meta { font-size: 12px; gap: 6px; flex-wrap: nowrap; align-items: center; overflow: hidden; white-space: nowrap; }
+    .card .card-meta .badge { flex: 0 0 auto; display: inline-flex; align-items: center; }
+    .card .card-meta .count-seg, .card .card-meta .meta-text { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    /* 收藏心形固定在描述行最右端 */
+    .card .card-meta .fav-ic { margin-left: auto; flex: 0 0 auto; }
+    /* 标题已有竖条/描述区分类型，去掉行首 emoji */
     .card .kind-ic { display: none; }
-    /* 小卡更高一档：封面 16:9 → 4:3 */
-    .card .cover { aspect-ratio: 4 / 3; }
-    /* 小卡不显示时长角标（双列小图上意义不大） */
-    .card .cover-badge { display: none; }
     .modal-body { width: 96vw; }
     /* 详情页：播放器在上 · 列表在下 */
     .video-layout { grid-template-columns: 1fr; }

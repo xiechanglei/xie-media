@@ -10,6 +10,7 @@
         scope: 'mine',
         page: 0, pageSize: 24, keyword: '',
         total: 0, list: [], hasMore: true, loading: false,
+        listDirty: false,        // 详情页发生变更后置 true，返回列表时重新拉取
         // 用户
         user: null,
         // 视图
@@ -43,6 +44,12 @@
     }
     const fmtTime = (ts) => { try { return new Date(ts).toLocaleString() } catch { return '' } }
     const fmtDate = (ts) => { try { return new Date(ts).toLocaleDateString() } catch { return '' } }
+    // 日期精确到分钟：YYYY-MM-DD HH:mm
+    const fmtDateTime = (ts) => {
+        const d = new Date(ts); if (isNaN(d)) return ''
+        const p = (n) => String(n).padStart(2, '0')
+        return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`
+    }
     function fmtSize(bytes) {
         if (!bytes) return ''
         const u = ['B', 'KB', 'MB', 'GB', 'TB']; let i = 0, n = bytes
@@ -52,9 +59,36 @@
     function escapeHtml(s) {
         return String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c])
     }
-    function openModal(id) { $('#' + id).classList.remove('hidden'); document.body.style.overflow = 'hidden' }
+    // 移动端/X5类内核会把播放中的 video 提升为独立原生播放器层，凌驾于页面CSS层叠与z-index之上，
+    // pause()/visibility 均无法拆除该层；故弹层期间将详情页视频元素整体移出文档（移除元素必毁层），
+    // 关闭弹层后原位插回并恢复进度与播放态
+    let stashedPlayer = null
+    function stashDetailPlayer() {
+        const v = $('#detailBody video'); if (!v || stashedPlayer) return
+        stashedPlayer = { el: v, parent: v.parentElement, next: v.nextElementSibling, time: v.currentTime || 0, playing: !v.paused }
+        try { v.pause() } catch { }
+        v.remove()
+    }
+    function restoreDetailPlayer() {
+        if (!stashedPlayer) return
+        const s = stashedPlayer; stashedPlayer = null
+        if (!s.parent || !document.body.contains(s.parent)) return // 主体已被重建，丢弃旧播放器
+        const v = s.el
+        s.parent.insertBefore(v, s.next)
+        const resume = () => {
+            try { if (s.time > 0) v.currentTime = s.time } catch { }
+            if (s.playing) { const p = v.play(); if (p && p.catch) p.catch(() => { }) }
+        }
+        if (v.readyState >= 1) resume()
+        else v.addEventListener('loadedmetadata', resume, { once: true })
+    }
+    function openModal(id) {
+        stashDetailPlayer()
+        $('#' + id).classList.remove('hidden'); document.body.style.overflow = 'hidden'
+    }
     function closeModal(id) {
         $('#' + id).classList.add('hidden'); document.body.style.overflow = ''
+        restoreDetailPlayer()
         if (id === 'lightbox') {
             const v = $('#lbStage').querySelector('video'); if (v) try { v.pause() } catch { }
             $('#lbStage').innerHTML = ''
@@ -231,6 +265,7 @@
     function stopDetailPlayback() {
         $$('#detailBody video').forEach(v => { try { v.pause(); v.removeAttribute('src'); v.load() } catch { } })
         $('#detailBody').innerHTML = ''
+        stashedPlayer = null // 暂存的播放器随页面销毁一起丢弃
     }
     function applyRoute(route) {
         if (route.view === 'detail') {
@@ -254,7 +289,7 @@
             syncSidebarActive()
             syncUploadBtnVisible()
             syncSelectUI()
-            if (scopeChanged || state.list.length === 0) reset()
+            if (scopeChanged || state.listDirty || state.list.length === 0) { state.listDirty = false; reset() }
         }
     }
     function gotoList(scope) {
@@ -361,19 +396,23 @@
         else kindIcon = '🖼'
         const meta = []
         meta.push(`<span class="badge ${it.visibility}">${it.visibility === 'public' ? '公开' : '私有'}</span>`)
-        if (vCount > 1) meta.push(`<span>${vCount} 视频</span>`)
-        if (iCount > 0) meta.push(`<span>${iCount} 图</span>`)
-        if (state.scope !== 'mine' && it.ownerName) meta.push(`<span>@${escapeHtml(it.ownerName)}</span>`)
-        if (it.category) meta.push(`<span>#${escapeHtml(it.category)}</span>`)
-        meta.push(`<span>${fmtDate(it.createdAt)}</span>`)
-        if (it.favorited) meta.push(`<span>★</span>`)
+        const rest = []
+        if (state.scope !== 'mine' && it.ownerName) rest.push(`<span class="meta-owner">@${escapeHtml(it.ownerName)}</span>`)
+        rest.push(`<span class="meta-date">${fmtDateTime(it.createdAt)}</span>`)
+        if (vCount > 1) rest.push(`<span>${vCount} 视频</span>`)
+        if (iCount > 0) rest.push(`<span>${iCount} 图</span>`)
+        meta.push(`<span class="meta-text">${rest.join(' · ')}</span>`)
+        // 文件数量（与徽章、文字纵向居中对齐）
+        if (it.itemCount) meta.push(`<span class="count-seg">${it.itemCount} 个文件</span>`)
+        // 收藏心形图标（与详情页一致）：固定描述行最右侧，未收藏灰空心/已收藏红实心
+        meta.push(`<span class="fav-ic ${it.favorited ? 'on' : ''}">${icon('heart', 13, it.favorited)}</span>`)
         card.innerHTML = `
             <div class="cover-wrap">
                 <img class="cover" loading="lazy" alt="" src="${coverUrl(it.id)}">
                 ${it.agg && it.agg.durationSec ? `<span class="cover-badge dur">${fmtDur(it.agg.durationSec)}</span>` : ''}
             </div>
             <div class="card-body">
-                <div class="card-title" title="${escapeHtml(it.title || '')}"><span class="kind-ic">${kindIcon}</span> ${escapeHtml(it.title || '')}</div>
+                <div class="card-title" title="${escapeHtml(it.title || '')}"><span class="kind-ic">${kindIcon}</span> ${escapeHtml(it.title || '')}${it.category ? ` <span class="title-cat">#${escapeHtml(it.category)}</span>` : ''}</div>
                 <div class="card-meta">${meta.join('')}</div>
             </div>`
         if (state.selectMode) {
@@ -525,6 +564,12 @@
         }
     }
     function renderDetail() {
+        renderDetailInfo()
+        // 主体：文件列表/播放器（自带上方操作条：切换浏览 / 编辑文件 / 开放 / 删除）
+        renderDetailBody()
+    }
+    /** 仅重渲顶部信息区：纯元信息变更时用它代替整页重建，避免播放器闪烁与移动端视频残影 */
+    function renderDetailInfo() {
         const d = state.detail; if (!d) return
         const canMutate = state.user && (d.ownerId === state.user.id || state.user.role === 'admin')
 
@@ -559,9 +604,6 @@
         ]
         $('#detailInfo').innerHTML = infoBits.join('')
 
-        // 主体：文件列表/播放器（自带上方操作条：切换浏览 / 编辑文件 / 开放 / 删除）
-        renderDetailBody()
-
         // 绑定信息区动作（fav / edit-meta）
         $('#detailInfo').querySelectorAll('button[data-act]').forEach(btn => {
             btn.addEventListener('click', () => handleDetailAction(btn.dataset.act, btn))
@@ -570,6 +612,9 @@
     function renderDetailBody() {
         const d = state.detail
         const body = $('#detailBody')
+        // 清空 DOM 前先暂停旧播放器：销毁即停，防移动端鬼影视频层继续播放盖住弹层
+        const oldV = body.querySelector('video')
+        if (oldV && !oldV.paused) { try { oldV.pause() } catch { } }
         body.innerHTML = ''
         const canMutate = state.user && (d.ownerId === state.user.id || state.user.role === 'admin')
         // 文件列表上方操作条：编辑态只留“完成编辑”，浏览态放切换浏览 + 所有者操作
@@ -640,6 +685,11 @@
         if (!it) return
         if (it.mediaType === 'video') {
             const v = document.createElement('video'); v.id = 'detailPlayer'; v.controls = true; v.playsInline = true
+            // X5类内核（微信/QQ/UC等）默认用“系统自带播放器”渲染 video，原生层盖住弹层且无视CSS；
+            // h5属性强制页内播放器，正常参与层叠；配合 openModal 的 stash 兑底
+            v.setAttribute('x5-video-player-type', 'h5')
+            v.setAttribute('x5-video-player-fullscreen', 'true')
+            v.setAttribute('x5-videofullscreen-video-plays-inline', 'true')
             v.src = itemUrl(it.id)
             stage.appendChild(v)
             // 不再默认静音；非用户手势下自动播放可能被浏览器拒绝，失败即停在封面等用户点
@@ -689,6 +739,9 @@
         const url = itemUrl(it.id)
         if (it.mediaType === 'video') {
             const v = document.createElement('video'); v.controls = true; v.src = url; v.autoplay = true; v.playsInline = true
+            v.setAttribute('x5-video-player-type', 'h5')
+            v.setAttribute('x5-video-player-fullscreen', 'true')
+            v.setAttribute('x5-videofullscreen-video-plays-inline', 'true')
             stage.appendChild(v)
         } else {
             const im = document.createElement('img'); im.src = url; im.alt = it.name || ''
@@ -712,6 +765,8 @@
         if (act === 'edit-items') return toggleItemEditor()
         if (act === 'del') return confirmDelete(d)
     }
+    /** 详情页操作后标记列表脏，返回时由 applyRoute 重新拉取 */
+    function markListDirty() { state.listDirty = true }
     async function toggleFav(d, btn) {
         const wasFav = d.favorited
         try {
@@ -725,6 +780,7 @@
                 })
             }
             d.favorited = !wasFav
+            markListDirty()
             if (btn) {
                 btn.classList.toggle('on', d.favorited)
                 btn.innerHTML = icon('heart', 18, d.favorited)
@@ -742,7 +798,11 @@
             })
             toast(next === 'public' ? '已开放到广场' : '已设为私有')
             d.visibility = next
-            renderDetail()
+            markListDirty()
+            // 可见性只影响徽章与操作条文案：局部更新，不重建播放器
+            renderDetailInfo()
+            const visBtn = $('#detailBody .body-toolbar button[data-act="vis"]')
+            if (visBtn) visBtn.innerHTML = next === 'public' ? `${icon('lock', 13)} 转私有` : `${icon('globe', 13)} 开放到广场`
         } catch (e) { toast('操作失败：' + e.message) }
     }
     function openEditMeta() {
@@ -752,12 +812,17 @@
         $('#editCategory').value = d.category || ''
         $('#editSubmit').onclick = async () => {
             try {
-                await api(`/api/collections/${d.id}`, {
+                const j = await api(`/api/collections/${d.id}`, {
                     method: 'PATCH', headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ title: $('#editTitle').value, category: $('#editCategory').value }),
                 })
                 closeModal('editModal'); toast('已保存')
-                await loadDetail(d.id)
+                markListDirty() // 标题/分类变了，列表卡片也要同步
+                // 纯元信息变更：用服务端归一化结果就地更新，只重渲信息区（不重新拉取整页，避免播放器闪烁与移动端视频图层盖住弹层）
+                const nd = (j && j.data) || {}
+                d.title = nd.title ?? d.title
+                d.category = nd.category !== undefined ? nd.category : d.category
+                renderDetailInfo()
             } catch (e) { toast('保存失败：' + e.message) }
         }
     }
@@ -822,6 +887,7 @@
             // 用服务器返回的最新 items 覆盖（保留其余字段）
             d.items = j.data.items
             d.itemCount = d.items.length
+            markListDirty() // 文件数量/封面可能变化
             closeItemEditor()
             renderDetail()
         } catch (e) { toast('保存失败：' + e.message) }
@@ -939,6 +1005,7 @@
                 if (!r.ok || j.success === false) throw new Error(j.message || ('HTTP ' + r.status))
                 appendInput.value = ''
                 toast('已追加')
+                markListDirty() // 文件数量/封面变了
                 await loadDetail(d.id)
                 // 追加后自动回到编辑态方便继续处理
                 openItemEditor()
