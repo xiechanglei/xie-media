@@ -38,9 +38,16 @@
         if (!r.ok || (j && j.success === false)) throw new Error((j && j.message) || ('HTTP ' + r.status))
         return j || { data: null }
     }
-    function toast(msg, ms = 1800) {
-        const el = $('#toast'); el.textContent = msg; el.classList.add('show')
-        clearTimeout(toast._t); toast._t = setTimeout(() => el.classList.remove('show'), ms)
+    function toast(msg, ms, type) {
+        // 未显式指定类型时按文案推断：失败/错误→error，已…/完成/成功→success，其余 info
+        if (!type) type = /失败|错误|不可恢复/.test(msg) ? 'error' : (/^(已|完成)|成功/.test(msg) ? 'success' : 'info')
+        const icName = { success: 'checkCircle', error: 'alert', info: 'info' }[type] || 'info'
+        const el = $('#toast')
+        el.querySelector('.toast-ic').innerHTML = icon(icName, 16)
+        el.querySelector('.toast-msg').textContent = msg
+        el.classList.remove('success', 'error', 'info')
+        el.classList.add('show', type)
+        clearTimeout(toast._t); toast._t = setTimeout(() => el.classList.remove('show'), ms || 2200)
     }
     const fmtTime = (ts) => { try { return new Date(ts).toLocaleString() } catch { return '' } }
     const fmtDate = (ts) => { try { return new Date(ts).toLocaleDateString() } catch { return '' } }
@@ -134,8 +141,14 @@
             state.user = j.data
         } catch (e) { console.warn('loadUser failed', e); return }
         if (state.user) {
-            $('#whoami').textContent = state.user.username + (state.user.role === 'admin' ? ' (管理员)' : '')
-            if (state.user.role === 'admin') $('#adminLink').classList.remove('hidden')
+            // 用户卡片：名字 + 首字母头像；管理员额外亮出角色徽章与管理入口
+            const name = state.user.username || ''
+            $('#userName').textContent = name
+            $('#userAvatar').textContent = name.slice(0, 1) || '·'
+            if (state.user.role === 'admin') {
+                $('#userRole').classList.remove('hidden')
+                $('#adminLink').classList.remove('hidden')
+            }
         }
     }
 
@@ -153,6 +166,11 @@
         down: '<polyline points="6 9 12 15 18 9"/>',
         undo: '<polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/>',
         grip: '<circle cx="9" cy="6" r="1.5"/><circle cx="9" cy="12" r="1.5"/><circle cx="9" cy="18" r="1.5"/><circle cx="15" cy="6" r="1.5"/><circle cx="15" cy="12" r="1.5"/><circle cx="15" cy="18" r="1.5"/>',
+        play: '<polygon points="5 3 19 12 5 21 5 3"/>',
+        image: '<rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/>',
+        checkCircle: '<path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/>',
+        alert: '<circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/>',
+        info: '<circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/>',
     }
     /** filled：爱心等需要“已选中实心”态的图标 */
     function icon(name, size, filled) {
@@ -308,6 +326,17 @@
         syncUploadBtnVisible()
     }
 
+    // ================= 主题（深色/浅色）=================
+    // 首帧主题由 views/index.html 头部内联脚本提前写入 data-theme，这里只负责切换与持久化
+    function initTheme() {
+        const btn = $('#themeToggle'); if (!btn) return
+        btn.addEventListener('click', () => {
+            const next = document.documentElement.dataset.theme === 'light' ? 'dark' : 'light'
+            document.documentElement.dataset.theme = next
+            try { localStorage.setItem('xm-theme', next) } catch { }
+        })
+    }
+
     // ================= 侧栏 / 抽屉 =================
     function syncSidebarActive() {
         $$('.side-item').forEach(x => x.classList.toggle('active', x.dataset.scope === state.scope))
@@ -346,9 +375,18 @@
     }
 
     // ================= 列表 =================
+    // 骨架屏：重置首页时先铺占位卡，数据到达后由 clearSkeleton 统一移除
+    function showSkeleton(n = 10) {
+        $('#grid').innerHTML = Array.from({ length: n }, () => `
+            <div class="card skeleton">
+                <div class="sk-block sk-cover"></div>
+                <div class="sk-body"><div class="sk-block sk-line w70"></div><div class="sk-block sk-line w40"></div></div>
+            </div>`).join('')
+    }
+    function clearSkeleton() { $$('#grid .skeleton').forEach(el => el.remove()) }
     function reset() {
         state.page = 0; state.list = []; state.hasMore = true; state.total = 0
-        $('#grid').innerHTML = ''
+        showSkeleton()
         $('#endMsg').classList.add('hidden')
         $('#empty').classList.add('hidden')
         load()
@@ -378,11 +416,17 @@
                     : (state.scope === 'favorites' ? '还没有收藏，去广场或我的里挑一个吧' : '广场暂时是空的')
             } else emptyEl.classList.add('hidden')
         } catch (e) { toast('加载失败：' + e.message); state.hasMore = false }
-        finally { state.loading = false; $('#loading').classList.add('hidden') }
+        finally { state.loading = false; clearSkeleton(); $('#loading').classList.add('hidden') }
     }
     function renderAppend(items) {
         const grid = $('#grid')
-        for (const it of items) grid.appendChild(renderCard(it))
+        clearSkeleton()
+        for (const it of items) {
+            const card = renderCard(it)
+            // 入场错峰：按当前列数循环递增延迟，首屏卡片像瀑布一样依次浮现
+            card.style.setProperty('--d', (grid.children.length % 12) * 45 + 'ms')
+            grid.appendChild(card)
+        }
     }
     function renderCard(it) {
         // 卡片无操作按钮，点击仅跳转详情（收藏/编辑/删除/可见性都在详情页里）
@@ -404,10 +448,13 @@
         if (it.itemCount) meta.push(`<span class="count-seg">${it.itemCount} 个文件</span>`)
         // 收藏心形图标（与详情页一致）：固定描述行最右侧，未收藏灰空心/已收藏红实心
         meta.push(`<span class="fav-ic ${it.favorited ? 'on' : ''}">${icon('heart', 13, it.favorited)}</span>`)
+        // 封面悬停浮层：居中播放/图片徽标 + 文件数（仅桌面端封面可见）
+        const hoverBadge = vCount > 0 ? icon('play', 18, true) : icon('image', 18)
         card.innerHTML = `
             <div class="cover-wrap">
                 <img class="cover" loading="lazy" alt="" src="${coverUrl(it.id)}">
                 ${it.agg && it.agg.durationSec ? `<span class="cover-badge dur">${fmtDur(it.agg.durationSec)}</span>` : ''}
+                <div class="cover-hover"><span class="ch-badge">${hoverBadge}</span><span class="ch-text">${it.itemCount || 0} 个文件</span></div>
             </div>
             <div class="card-body">
                 <div class="card-title" title="${escapeHtml(it.title || '')}"><span class="kind-ic">${kindIcon}</span> ${escapeHtml(it.title || '')}${it.category ? ` <span class="title-cat">#${escapeHtml(it.category)}</span>` : ''}</div>
@@ -764,6 +811,7 @@
         const grid = document.createElement('div'); grid.className = 'album-grid'
         d.items.forEach((it, i) => {
             const cell = document.createElement('div'); cell.className = 'cell' + (it.mediaType === 'video' ? ' video' : '')
+            cell.style.setProperty('--d', (i % 18) * 40 + 'ms')
             const img = document.createElement('img'); img.loading = 'lazy'; img.src = itemThumbUrl(it.id); img.alt = it.name || ''
             cell.appendChild(img)
             const nm = document.createElement('div'); nm.className = 'name'; nm.textContent = it.name || ''
@@ -1293,6 +1341,7 @@
 
     // ================= 入口 =================
     document.addEventListener('DOMContentLoaded', async () => {
+        initTheme()
         await loadUser()
         initSidebar()
         initTopbar()
