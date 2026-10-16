@@ -4,7 +4,6 @@ import * as path from 'node:path'
 import { createAuthServer } from "@xie-work/xie-auth"
 import { resolveArgs } from "./src/args.js"
 import {
-    APP_TITLE,
     ALLOWED_EXTENSIONS,
     UPLOAD_MAX_FILES,
     UPLOAD_MAX_SIZE,
@@ -16,7 +15,7 @@ import { createMediaHandlers } from "./src/media.js"
 import { createScanner } from "./src/scanner.js"
 
 // 解析命令行参数
-const { port, dir } = resolveArgs()
+const { port, dir, title } = resolveArgs()
 
 // 初始化工作目录
 const workDir = initStoreDir(dir)
@@ -38,7 +37,7 @@ const media = createMediaHandlers({
 
 // 链式配置：静态资源、视图模板、上传、路由、守卫
 const app = createAuthServer()
-    .title(APP_TITLE)
+    .title(title)
     .userStore(path.join(workDir.root, 'users.json'))
     .static(path.join(__dirname, 'public'))
     .views(path.join(__dirname, 'views'))
@@ -52,7 +51,7 @@ const app = createAuthServer()
     .authGuard('/');
 
 // -------- 主页 --------
-app.use('/', (ctx) => ctx.sendView('index.html', { appTitle: APP_TITLE }))
+app.use('/', (ctx) => ctx.sendView('index.html', { appTitle: title }))
 
 // -------- 列表 / 上传 --------
 app.useAuth('/api/media', 'GET', media.listMedia)
@@ -94,7 +93,7 @@ const scanner = createScanner({
 })
 scanner.start()
 
-console.log(`\n  ${APP_TITLE}`)
+console.log(`\n  ${title}`)
 console.log(`  dir   : ${workDir.root}`)
 console.log(`  scan  : ${workDir.scanDir}`)
 console.log(`  port  : ${port}`)

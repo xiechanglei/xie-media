@@ -1,5 +1,5 @@
-// 应用标题
-export const APP_TITLE = "xie media server"
+// 应用标题默认值（可通过启动命令 --title 覆盖）
+export const DEFAULT_APP_TITLE = "media server"
 
 // 允许上传的视频扩展名（小写，不带点）
 export const VIDEO_EXTENSIONS = ['mp4', 'webm', 'mov', 'mkv']
