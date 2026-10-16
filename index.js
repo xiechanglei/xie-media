@@ -61,6 +61,9 @@ app.useAuth('/api/upload', 'POST', media.upload)
 // -------- 集合合并（多选归并；须在 :id 之前注册，避免 merge 被当作 :id）--------
 app.useAuth('/api/collections/merge', 'POST', media.mergeCollections)
 
+// -------- 批量操作（多选公开/私有/删除/收藏/取消收藏；同样须在 :id 之前）--------
+app.useAuth('/api/collections/batch', 'POST', media.batchCollections)
+
 // -------- 集合（视频/相册）CRUD --------
 app.useAuth('/api/collections/:id', 'GET', media.getCollection)
 app.useAuth('/api/collections/:id', 'PATCH', media.updateCollection)

@@ -464,6 +464,59 @@ export function createMediaHandlers(cfg) {
         }
     }
 
+    // ===================== 批量操作（列表多选）=====================
+
+    /**
+     * 请求体：{ ids: [collectionId, ...], op: 'public'|'private'|'delete'|'fav'|'unfav' }
+     * 逐项执行不中断，单项失败计入 failed 返回；删除同样按引用计数清理 store 文件与缩略图。
+     */
+    function batchCollections(ctx) {
+        const user = ctx.user
+        const rawIds = Array.isArray(ctx.body.ids) ? ctx.body.ids.map(x => String(x)) : []
+        const ids = [...new Set(rawIds)]
+        if (!ids.length) throw new Error('请至少选择一个资源')
+        const op = (ctx.body.op || '').toString()
+        if (!['public', 'private', 'delete', 'fav', 'unfav'].includes(op)) {
+            throw new Error('op 必须为 public|private|delete|fav|unfav')
+        }
+
+        let done = 0
+        const failed = []
+        const deletedMd5s = []
+        for (const id of ids) {
+            const row = dbGet(`SELECT * FROM collections WHERE id=?`, id)
+            if (!row) { failed.push({ id, reason: '资源不存在' }); continue }
+            try {
+                if (op === 'public' || op === 'private') {
+                    if (!canMutate(user, row)) throw new Error('无权修改')
+                    dbRun(`UPDATE collections SET visibility=?, updated_at=? WHERE id=?`, op, nowMs(), id)
+                } else if (op === 'delete') {
+                    if (!canMutate(user, row)) throw new Error('无权删除')
+                    const items = dbAll(`SELECT md5 FROM items WHERE collection_id=?`, id)
+                    tx(() => {
+                        dbRun(`DELETE FROM items WHERE collection_id=?`, id)
+                        dbRun(`DELETE FROM collections WHERE id=?`, id)
+                        dbRun(`DELETE FROM favorites WHERE target_id=?`, id)
+                    })
+                    for (const it of items) deletedMd5s.push(it.md5)
+                } else if (op === 'fav') {
+                    if (!canRead(user, row)) throw new Error('无权访问该资源')
+                    dbRun(
+                        `INSERT OR IGNORE INTO favorites (id,user_id,target_id,created_at) VALUES (?,?,?,?)`,
+                        newId(), user.id, id, nowMs())
+                } else { // unfav：未收藏时删除 0 行，幂等
+                    dbRun(`DELETE FROM favorites WHERE user_id=? AND target_id=?`, user.id, id)
+                }
+                done++
+            } catch (e) {
+                failed.push({ id, title: row.title, reason: e.message })
+            }
+        }
+        // 事务外按引用计数清理已删文件（仍被其他 item 引用则保留）
+        for (const md5 of deletedMd5s) cleanupMd5IfUnreferenced(md5)
+        return { op, done, failed }
+    }
+
     // ===================== 收藏 =====================
 
     function addFavorite(ctx) {
@@ -548,7 +601,7 @@ export function createMediaHandlers(cfg) {
     return {
         listMedia, upload,
         getCollection, updateCollection, updateCollectionVisibility, deleteCollection,
-        patchItems, collectionAddItems, mergeCollections,
+        patchItems, collectionAddItems, mergeCollections, batchCollections,
         addFavorite, removeFavorite,
         serveItemFile, serveCollectionThumbnail, serveItemThumbnail,
     }

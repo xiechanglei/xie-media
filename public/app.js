@@ -399,8 +399,6 @@
         const rest = []
         if (state.scope !== 'mine' && it.ownerName) rest.push(`<span class="meta-owner">@${escapeHtml(it.ownerName)}</span>`)
         rest.push(`<span class="meta-date">${fmtDateTime(it.createdAt)}</span>`)
-        if (vCount > 1) rest.push(`<span>${vCount} 视频</span>`)
-        if (iCount > 0) rest.push(`<span>${iCount} 图</span>`)
         meta.push(`<span class="meta-text">${rest.join(' · ')}</span>`)
         // 文件数量（与徽章、文字纵向居中对齐）
         if (it.itemCount) meta.push(`<span class="count-seg">${it.itemCount} 个文件</span>`)
@@ -435,16 +433,30 @@
     }
     /** 同步选择相关按钮/操作栏可见性 */
     function syncSelectUI() {
-        const inMineList = state.scope === 'mine' && state.view === 'list'
-        $('#selectBtn').classList.toggle('hidden', state.selectMode || !inMineList)
+        const inList = state.view === 'list'
+        $('#selectBtn').classList.toggle('hidden', state.selectMode || !inList)
         $('#selectBar').classList.toggle('hidden', !state.selectMode)
         document.body.classList.toggle('has-select-bar', state.selectMode)
+        syncSelActions()
         updateSelectBar()
+    }
+    /** 底部栏动作按视图显隐：我的=合并/公开/私有/删除，广场=收藏，收藏=取消收藏 */
+    function syncSelActions() {
+        const mine = state.scope === 'mine'
+        $('#selMerge').classList.toggle('hidden', !mine)
+        $('#selPublic').classList.toggle('hidden', !mine)
+        $('#selPrivate').classList.toggle('hidden', !mine)
+        $('#selDelete').classList.toggle('hidden', !mine)
+        $('#selFav').classList.toggle('hidden', state.scope !== 'plaza')
+        $('#selUnfav').classList.toggle('hidden', state.scope !== 'favorites')
     }
     function updateSelectBar() {
         const n = state.selected.size
         $('#selCount').textContent = `已选 ${n} 项`
         $('#selMerge').disabled = n < 2
+        for (const sel of ['#selPublic', '#selPrivate', '#selDelete', '#selFav', '#selUnfav']) {
+            const b = $(sel); if (b) b.disabled = n === 0
+        }
         const allSel = state.list.length > 0 && state.list.every(x => state.selected.has(String(x.id)))
         $('#selSelectAll').textContent = allSel ? '清空' : '全选'
     }
@@ -523,6 +535,40 @@
         $('#selSelectAll').addEventListener('click', toggleSelectAll)
         $('#selMerge').addEventListener('click', openMergeModal)
         $('#mergeSubmit').addEventListener('click', doMerge)
+        $('#selPublic').addEventListener('click', () => batchOp('public'))
+        $('#selPrivate').addEventListener('click', () => batchOp('private'))
+        $('#selFav').addEventListener('click', () => batchOp('fav'))
+        $('#selUnfav').addEventListener('click', () => batchOp('unfav'))
+        $('#selDelete').addEventListener('click', confirmBatchDelete)
+    }
+
+    // ---- 批量操作： POST /api/collections/batch { ids, op } ----
+    const BATCH_LABELS = { public: '公开', private: '私有', delete: '删除', fav: '收藏', unfav: '取消收藏' }
+    async function batchOp(op, ids) {
+        ids = ids || selectedIdsInOrder()
+        if (!ids.length) return toast('请至少选择一个资源')
+        try {
+            const j = await api('/api/collections/batch', {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ ids, op }),
+            })
+            const res = (j && j.data) || {}
+            const done = res.done || 0, failed = res.failed || []
+            closeModal('confirmModal')
+            toast(failed.length
+                ? `${BATCH_LABELS[op]}：成功 ${done}，失败 ${failed.length}`
+                : `已${BATCH_LABELS[op]} ${done} 个资源`)
+            exitSelectMode(false)
+            reset() // 重拉首页：徽章/心形/列表成员都随操作变化
+        } catch (e) { toast('操作失败：' + e.message) }
+    }
+    /** 批量删除前用通用确认弹层兑一道 */
+    function confirmBatchDelete() {
+        const ids = selectedIdsInOrder()
+        if (!ids.length) return toast('请至少选择一个资源')
+        openModal('confirmModal')
+        $('#confirmText').textContent = `确定删除选中的 ${ids.length} 个资源？文件将按引用计数清理，此操作不可恢复。`
+        $('#confirmOk').onclick = () => batchOp('delete', ids)
     }
 
     // ================= 无限滚动 =================

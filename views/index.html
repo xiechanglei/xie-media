@@ -135,13 +135,20 @@
 
 <div id="toast" class="toast"></div>
 
-<!-- 多选模式底部操作栏：仅在列表页选择模式显示 -->
+<!-- 多选模式底部操作栏：三个视图均可用，按 scope 显隐不用的动作 -->
 <div id="selectBar" class="select-bar hidden">
     <span class="sel-count" id="selCount">已选 0 项</span>
     <button id="selSelectAll" class="mini-btn" type="button">全选</button>
     <div class="grow"></div>
-    <button id="selCancel" class="ghost" type="button">取消</button>
-    <button id="selMerge" class="primary" type="button" disabled>合并所选</button>
+    <span class="sel-actions">
+        <button id="selMerge" class="mini-btn" type="button" disabled>合并</button>
+        <button id="selPublic" class="mini-btn" type="button" disabled>公开</button>
+        <button id="selPrivate" class="mini-btn" type="button" disabled>私有</button>
+        <button id="selDelete" class="mini-btn danger" type="button" disabled>删除</button>
+        <button id="selFav" class="mini-btn" type="button" disabled>收藏</button>
+        <button id="selUnfav" class="mini-btn" type="button" disabled>取消收藏</button>
+    </span>
+    <button id="selCancel" class="mini-btn" type="button">取消</button>
 </div>
 
 <!-- 合并弹层：确认将选中的多个资源归并为一个新资源 -->
