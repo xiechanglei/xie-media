@@ -1037,7 +1037,13 @@
             const xhr = new XMLHttpRequest()
             xhr.open('POST', '/api/upload', true)
             xhr.withCredentials = true
-            xhr.upload.onprogress = (e) => { if (e.lengthComputable) setProgress(e.loaded / e.total) }
+            xhr.upload.onprogress = (e) => {
+                if (!e.lengthComputable) return
+                const p = e.loaded / e.total
+                setProgress(p)
+                // 字节传完后服务端还要算 MD5/落盘/探元数据，明确告知用户在等后端
+                if (p >= 1) prog.textContent = '上传完成，服务器处理中…'
+            }
             xhr.onload = () => {
                 let j = null
                 try { j = JSON.parse(xhr.responseText) } catch { /* ignore */ }
@@ -1095,9 +1101,9 @@
                 xhr.upload.onprogress = (e) => {
                     if (!e.lengthComputable) return
                     const p = e.loaded / e.total
-                    setStatus(i, Math.round(p * 100) + '%', 'doing')
-                    fill.style.width = Math.round(((idx + p) / total) * 100) + '%'
-                    prog.textContent = `批量上传 ${idx}/${total} 已完成`
+                    setStatus(i, p >= 1 ? '服务器处理中…' : Math.round(p * 100) + '%', 'doing')
+                    fill.style.width = Math.round(((idx + Math.min(p, 1)) / total) * 100) + '%'
+                    prog.textContent = p >= 1 ? `批量上传 ${idx}/${total} 已完成，服务器处理中…` : `批量上传 ${idx}/${total} 已完成`
                 }
                 xhr.onload = () => {
                     let j = null

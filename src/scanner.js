@@ -141,7 +141,7 @@ export function createScanner(cfg) {
                 console.error(`[scan] 移入 store 失败 ${f}: ${e.message}`)
                 continue
             }
-            const meta = cls.type === 'video' ? probeVideoMeta(target) : null
+            const meta = cls.type === 'video' ? await probeVideoMeta(target) : null
             newItems.push({ md5, ext: cls.ext, originalName: path.basename(f), size, type: cls.type, meta })
             filesIngested++
         }

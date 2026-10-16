@@ -185,7 +185,8 @@ export function createMediaHandlers(cfg) {
 
     // ===================== 上传（创建新 collection）=====================
 
-    function upload(ctx) {
+    async function upload(ctx) {
+        console.log("received upload request")
         const user = ctx.user
         const titleInput = (ctx.body.title || '').toString().trim()
         const categoryInput = (ctx.body.category || '').toString().trim() || null
@@ -201,21 +202,26 @@ export function createMediaHandlers(cfg) {
         const ts = nowMs()
         const title = titleInput || stripExt(files[0].filename)
 
+        // 先落盘 + 异步探测元数据：ffprobe 不再阻塞事件循环，也不占用事务窗口
+        const prepared = []
+        for (const { f, info } of classified) {
+            const finalPath = persistFile(f)
+            const meta = info.type === 'video' ? await probeVideoMeta(finalPath) : null
+            prepared.push({ f, info, meta })
+        }
+
         tx(() => {
             dbRun(
                 `INSERT INTO collections (id,title,category,owner_id,owner_name,visibility,created_at,updated_at)
                  VALUES (?,?,?,?,?, 'private', ?, ?)`,
                 collectionId, title, categoryInput, user.id, user.username, ts, ts)
-            files.forEach((f, i) => {
-                const { info } = classified[i]
-                const finalPath = persistFile(f)
-                const meta = info.type === 'video' ? probeVideoMeta(finalPath) : null
+            prepared.forEach((p, i) => {
                 dbRun(
                     `INSERT INTO items (id,collection_id,md5,ext,original_name,name,mime,size,media_type,sort_order,created_at,meta_json)
                      VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
-                    newId(), collectionId, f.md5, info.ext, f.filename, null,
-                    guessMime(info.ext), f.size, info.type, i, ts,
-                    meta ? JSON.stringify(meta) : null)
+                    newId(), collectionId, p.f.md5, p.info.ext, p.f.filename, null,
+                    guessMime(p.info.ext), p.f.size, p.info.type, i, ts,
+                    p.meta ? JSON.stringify(p.meta) : null)
             })
         })
 
@@ -348,7 +354,7 @@ export function createMediaHandlers(cfg) {
 
     // ===================== items 追加 =====================
 
-    function collectionAddItems(ctx) {
+    async function collectionAddItems(ctx) {
         const row = getCollectionOrThrow(ctx.params.id)
         if (!canMutate(ctx.user, row)) throw new Error('无权修改')
         const files = ctx.files.files || []
@@ -359,21 +365,27 @@ export function createMediaHandlers(cfg) {
             if (!info) throw new Error(`不允许的文件类型：${f.filename}`)
         }
 
-        const max = dbGet(`SELECT COALESCE(MAX(sort_order), -1) AS m FROM items WHERE collection_id=?`, row.id).m
         const ts = nowMs()
+        // 落盘与 ffprobe 探测均在事务外：避免 await 期间其他请求写入串进同一事务
+        const prepared = []
+        for (const { f, info } of classified) {
+            const finalPath = persistFile(f)
+            const meta = info.type === 'video' ? await probeVideoMeta(finalPath) : null
+            prepared.push({ f, info, meta })
+        }
+
         tx(() => {
-            files.forEach((f, i) => {
-                const { info } = classified[i]
-                const finalPath = persistFile(f)
-                const meta = info.type === 'video' ? probeVideoMeta(finalPath) : null
+            // sort_order 基准在事务内读取，防止并发追加交错导致序号重复
+            const max = dbGet(`SELECT COALESCE(MAX(sort_order), -1) AS m FROM items WHERE collection_id=?`, row.id).m
+            prepared.forEach((p, i) => {
                 dbRun(
                     `INSERT INTO items (id,collection_id,md5,ext,original_name,name,mime,size,media_type,sort_order,created_at,meta_json)
                      VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
-                    newId(), row.id, f.md5, info.ext, f.filename, null,
-                    guessMime(info.ext), f.size, info.type, max + 1 + i, ts,
-                    meta ? JSON.stringify(meta) : null)
+                    newId(), row.id, p.f.md5, p.info.ext, p.f.filename, null,
+                    guessMime(p.info.ext), p.f.size, p.info.type, max + 1 + i, ts,
+                    p.meta ? JSON.stringify(p.meta) : null)
             })
-            dbRun(`UPDATE collections SET updated_at=? WHERE id=?`, ts, row.id)
+            dbRun(`UPDATE collections SET updated_at=? WHERE id=?`, nowMs(), row.id)
         })
 
         return { id: row.id, items: listItemsOf(row.id) }
