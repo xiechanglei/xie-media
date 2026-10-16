@@ -102,6 +102,26 @@
         }
     }
 
+    // ================= SVG 图标（线性风 · stroke 跟随 currentColor）=================
+    const ICON_PATHS = {
+        pencil: '<path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>',
+        heart: '<path d="M20.84 4.66a5.5 5.5 0 0 0-7.78 0L12 5.7l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.79 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/>',
+        globe: '<circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/>',
+        lock: '<rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/>',
+        grid: '<rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/>',
+        list: '<line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/>',
+        trash: '<polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>',
+        check: '<polyline points="20 6 9 17 4 12"/>',
+        up: '<polyline points="18 15 12 9 6 15"/>',
+        down: '<polyline points="6 9 12 15 18 9"/>',
+        undo: '<polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/>',
+    }
+    /** filled：爱心等需要“已选中实心”态的图标 */
+    function icon(name, size, filled) {
+        const s = size || 16
+        return `<svg class="ic" width="${s}" height="${s}" viewBox="0 0 24 24" fill="${filled ? 'currentColor' : 'none'}" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICON_PATHS[name] || ''}</svg>`
+    }
+
     // ================= 路由 =================
     function parseHash() {
         const h = (location.hash || '').replace(/^#/, '')
@@ -113,15 +133,22 @@
         return { view: 'list', scope: state.scope }
     }
     function buildListHash(scope) { return `#/list/${scope || state.scope}` }
+    /** 离开详情页时销毁播放区：仅 hidden 不会暂停 video，移动端会在后台继续出声 */
+    function stopDetailPlayback() {
+        $$('#detailBody video').forEach(v => { try { v.pause(); v.removeAttribute('src'); v.load() } catch { } })
+        $('#detailBody').innerHTML = ''
+    }
     function applyRoute(route) {
         if (route.view === 'detail') {
             state.view = 'detail'
+            if (!$('#detailView').classList.contains('hidden')) stopDetailPlayback() // 详情 A → 详情 B 也先销毁旧播放器
             $('#listView').classList.add('hidden')
             $('#detailView').classList.remove('hidden')
             hideTopbarListOnly()
             loadDetail(route.id)
         } else {
             const scopeChanged = route.scope && route.scope !== state.scope
+            if (state.view === 'detail') stopDetailPlayback()
             state.view = 'list'
             state.scope = route.scope || state.scope
             $('#detailView').classList.add('hidden')
@@ -140,9 +167,11 @@
     function hideTopbarListOnly() {
         $('#searchInput').classList.add('hidden')
         $('#uploadBtn').classList.add('hidden')
+        $('#detailBack').classList.remove('hidden')
     }
     function showTopbarListOnly() {
         $('#searchInput').classList.remove('hidden')
+        $('#detailBack').classList.add('hidden')
         syncUploadBtnVisible()
     }
 
@@ -163,9 +192,10 @@
         $('#overlay').addEventListener('click', closeDrawer)
     }
 
-    // ================= 顶栏（搜索 / 登出 / 回顶）=================
+    // ================= 顶栏（搜索 / 登出 / 回顶 / 详情返回）=================
     function initTopbar() {
         let kwTimer
+        $('#detailBack').addEventListener('click', () => gotoList())
         $('#searchInput').addEventListener('input', e => {
             clearTimeout(kwTimer)
             kwTimer = setTimeout(() => { state.keyword = e.target.value.trim(); reset() }, 300)
@@ -276,7 +306,6 @@
     async function loadDetail(id) {
         $('#detailBody').innerHTML = '<div class="loading">加载中…</div>'
         $('#detailInfo').innerHTML = ''
-        $('#detailActions').innerHTML = ''
         try {
             const j = await api(`/api/collections/${id}`)
             state.detail = j.data
@@ -310,7 +339,8 @@
             if (agg.codecs && agg.codecs.length) aggBits.push(`<span>${escapeHtml(agg.codecs.map(c => c.toUpperCase()).join('/'))}</span>`)
         }
         const infoBits = [
-            `<h2 class="title">${escapeHtml(d.title || '')}</h2>`,
+            // 标题后紧跟编辑小图标（仅所有者/管理员）：点击打开编辑信息弹层
+            `<h2 class="title">${escapeHtml(d.title || '')}${canMutate ? ` <button class="icon-act" data-act="edit-meta" type="button" title="编辑信息">${icon('pencil', 15)}</button>` : ''}</h2>`,
             `<div class="meta">`,
             `<span class="badge ${d.visibility}">${d.visibility === 'public' ? '公开' : '私有'}</span>`,
             `<span>${kindLabel}</span>`,
@@ -318,45 +348,54 @@
             d.category ? `<span>#${escapeHtml(d.category)}</span>` : '',
             d.ownerName ? `<span>@${escapeHtml(d.ownerName)}</span>` : '',
             `<span>${fmtTime(d.createdAt)}</span>`,
+            // 描述信息末尾的收藏爱心
+            `<button class="icon-act fav-heart ${d.favorited ? 'on' : ''}" data-act="fav" type="button" title="${d.favorited ? '取消收藏' : '收藏'}">${icon('heart', 18, d.favorited)}</button>`,
             `</div>`,
         ]
         $('#detailInfo').innerHTML = infoBits.join('')
 
-        // 顶部动作按钮（浏览模式切换任何人都可用，故先于权限判断加入）
-        const acts = []
-        acts.push(`<button class="mini-btn" data-act="view" type="button" title="切换浏览方式">${state.viewMode === 'list' ? '▦ 平铺' : '☰ 列表'}</button>`)
-        acts.push(`<button class="mini-btn fav ${d.favorited ? 'fav-active' : ''}" data-act="fav" type="button">${d.favorited ? '★ 已收藏' : '☆ 收藏'}</button>`)
-        if (canMutate) {
-            acts.push(`<button class="mini-btn" data-act="vis" type="button">${d.visibility === 'public' ? '转私有' : '开放到广场'}</button>`)
-            acts.push(`<button class="mini-btn" data-act="edit-meta" type="button">编辑信息</button>`)
-            acts.push(`<button class="mini-btn" data-act="edit-items" type="button">编辑文件</button>`)
-            acts.push(`<button class="mini-btn danger" data-act="del" type="button">删除</button>`)
-        }
-        $('#detailActions').innerHTML = acts.join('')
-
-        // 主体：按当前浏览模式
+        // 主体：文件列表/播放器（自带上方操作条：切换浏览 / 编辑文件 / 开放 / 删除）
         renderDetailBody()
 
-        // 绑定动作
-        $('#detailActions').querySelectorAll('button[data-act]').forEach(btn => {
+        // 绑定信息区动作（fav / edit-meta）
+        $('#detailInfo').querySelectorAll('button[data-act]').forEach(btn => {
             btn.addEventListener('click', () => handleDetailAction(btn.dataset.act, btn))
         })
-        $('#detailBack').onclick = () => gotoList()
     }
     function renderDetailBody() {
         const d = state.detail
         const body = $('#detailBody')
         body.innerHTML = ''
+        const canMutate = state.user && (d.ownerId === state.user.id || state.user.role === 'admin')
+        // 文件列表上方操作条：编辑态只留“完成编辑”，浏览态放切换浏览 + 所有者操作
+        const btns = []
+        if (canMutate) {
+            btns.push(`<button class="mini-btn" data-act="edit-items" type="button">${icon(state.itemEditorOpen ? 'check' : 'pencil', 13)} ${state.itemEditorOpen ? '完成编辑' : '编辑文件'}</button>`)
+        }
+        if (!state.itemEditorOpen) {
+            btns.push(`<button class="mini-btn" data-act="view" type="button" title="切换浏览方式">${icon(state.viewMode === 'list' ? 'grid' : 'list', 13)} ${state.viewMode === 'list' ? '平铺' : '列表'}</button>`)
+            if (canMutate) {
+                btns.push(`<button class="mini-btn" data-act="vis" type="button">${d.visibility === 'public' ? `${icon('lock', 13)} 转私有` : `${icon('globe', 13)} 开放到广场`}</button>`)
+                btns.push(`<button class="mini-btn danger" data-act="del" type="button">${icon('trash', 13)} 删除</button>`)
+            }
+        }
+        if (btns.length) {
+            const bar = document.createElement('div'); bar.className = 'body-toolbar'
+            bar.innerHTML = btns.join('')
+            body.appendChild(bar)
+        }
         if (state.itemEditorOpen) {
             body.appendChild(buildItemEditor())
-            return
-        }
-        // list 模式仅在“含至少一个视频”时有意义；纯图片强制用平铺
-        if (state.viewMode === 'list' && d.items.some(it => it.mediaType === 'video')) {
+        } else if (state.viewMode === 'list' && d.items.some(it => it.mediaType === 'video')) {
+            // list 模式仅在“含至少一个视频”时有意义；纯图片强制用平铺
             body.appendChild(buildVideoLayout())
         } else {
             body.appendChild(buildAlbumGrid())
         }
+        // 绑定主体区动作（view / vis / edit-items / del）
+        body.querySelectorAll('button[data-act]').forEach(btn => {
+            btn.addEventListener('click', () => handleDetailAction(btn.dataset.act, btn))
+        })
     }
 
     // ---- 列表布局：大播放器 + 播放列表（主要面向含视频的资源）----
@@ -372,16 +411,9 @@
         d.items.forEach((it, i) => {
             const li = document.createElement('li')
             if (i === state.detailCurrentIdx) li.classList.add('active')
-            const m = it.meta
-            const tags = []
-            if (it.mediaType === 'image') tags.push('图片')
-            if (m) {
-                if (m.durationSec) tags.push(fmtDur(m.durationSec))
-                const rl = resLabel(m); if (rl) tags.push(rl)
-                if (m.videoCodec) tags.push(m.videoCodec.toUpperCase())
-            }
-            tags.push(fmtSize(it.size))
-            li.innerHTML = `<span class="idx">${i + 1}</span><span class="name" title="${escapeHtml(it.name)}">${escapeHtml(it.name)}</span><span class="type-badge">${tags.join(' · ')}</span>`
+            // 文件信息只显示时长（无时长的图片项不显示徽章）
+            const dur = it.meta && it.meta.durationSec ? fmtDur(it.meta.durationSec) : ''
+            li.innerHTML = `<span class="idx">${i + 1}</span><span class="name" title="${escapeHtml(it.name)}">${escapeHtml(it.name)}</span>${dur ? `<span class="type-badge">${dur}</span>` : ''}`
             li.addEventListener('click', () => playAt(i))
             ol.appendChild(li)
         })
@@ -484,8 +516,9 @@
             }
             d.favorited = !wasFav
             if (btn) {
-                btn.classList.toggle('fav-active', d.favorited)
-                btn.textContent = d.favorited ? '★ 已收藏' : '☆ 收藏'
+                btn.classList.toggle('on', d.favorited)
+                btn.innerHTML = icon('heart', 18, d.favorited)
+                btn.title = d.favorited ? '取消收藏' : '收藏'
             }
             toast(d.favorited ? '已收藏' : '已取消收藏')
         } catch (e) { toast('操作失败：' + e.message) }
@@ -579,7 +612,7 @@
         const wrap = document.createElement('div'); wrap.className = 'item-editor'
 
         const head = document.createElement('div'); head.className = 'item-editor-foot'
-        head.innerHTML = `<span class="hint">📝 修改显示名 · 🗑 删除 · ↕ 排序 · 保存后写回服务器</span>`
+        head.innerHTML = `<span class="hint">修改显示名 · 删除 · 排序 · 保存后写回服务器</span>`
         wrap.appendChild(head)
 
         const rowsEl = document.createElement('div')
@@ -613,11 +646,11 @@
                 <img class="thumb" loading="lazy" src="${itemThumbUrl(it.id)}" alt="">
                 <input class="name-input" type="text" value="${escapeHtml(st.name ?? '')}" placeholder="${escapeHtml(it.originalName)}" ${st.deleted ? 'disabled' : ''}>
                 <span class="media-badge">${mediaTags.join(' · ')}</span>
-                <button class="icon-btn" data-act="up" title="上移" ${st.deleted ? 'disabled' : ''}>↑</button>
-                <button class="icon-btn" data-act="down" title="下移" ${st.deleted ? 'disabled' : ''}>↓</button>
+                <button class="icon-btn" data-act="up" title="上移" ${st.deleted ? 'disabled' : ''}>${icon('up', 14)}</button>
+                <button class="icon-btn" data-act="down" title="下移" ${st.deleted ? 'disabled' : ''}>${icon('down', 14)}</button>
                 ${st.deleted
-                    ? `<button class="icon-btn restore" data-act="restore" title="撤销删除">↺</button>`
-                    : `<button class="icon-btn danger" data-act="del" title="删除">🗑</button>`}
+                    ? `<button class="icon-btn restore" data-act="restore" title="撤销删除">${icon('undo', 14)}</button>`
+                    : `<button class="icon-btn danger" data-act="del" title="删除">${icon('trash', 14)}</button>`}
             `
             const inp = row.querySelector('.name-input')
             inp.addEventListener('input', () => { st.name = inp.value })

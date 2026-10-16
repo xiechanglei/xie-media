@@ -121,16 +121,18 @@ button.primary:disabled, button.ghost:disabled, button.danger:disabled { opacity
 .badge { padding: 1px 6px; border-radius: 4px; background: var(--bg); color: var(--muted); font-size: 11px; }
 .badge.public { background: #d9ecd0; color: #3e7a34; }
 .badge.private { background: #f4dede; color: #9a3c3c; }
-.card-actions {
-    display: flex; gap: 6px; padding: 6px 10px 10px; border-top: 1px solid var(--border);
-    flex-wrap: wrap;
-}
 .mini-btn {
     background: transparent; border: 1px solid var(--border); border-radius: 6px;
     color: var(--fg); padding: 6px 10px; cursor: pointer; font-size: 12px; min-height: 34px;
+    display: inline-flex; align-items: center; gap: 5px;
 }
-.mini-btn.fav-active { background: #ffedd5; border-color: #f6a96a; color: #a15c1c; }
-.mini-btn.danger { color: var(--danger); border-color: #f0c1c1; }
+/* 内联 SVG 图标：随字色（currentColor），与文字同高对齐 */
+.ic { display: inline-block; vertical-align: -2px; flex: 0 0 auto; }
+/* 描边式删除小按钮：需显式覆盖全局实心 button.danger（否则红底红字、尺寸不一致） */
+.mini-btn.danger {
+    background: transparent; color: var(--danger); border: 1px solid #f0c1c1;
+    padding: 6px 10px; font-size: 12px; min-height: 34px;
+}
 
 /* ============ 弹层 ============ */
 .modal { position: fixed; inset: 0; z-index: 100; display: flex; align-items: center; justify-content: center; }
@@ -172,12 +174,24 @@ button.primary:disabled, button.ghost:disabled, button.danger:disabled { opacity
 
 /* ============ 详情页 ============ */
 .detail { display: flex; flex-direction: column; gap: 12px; }
-.detail-header { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
-.detail-header .back { padding: 6px 12px; min-height: 34px; }
-.detail-actions { display: inline-flex; gap: 8px; flex-wrap: wrap; align-items: center; }
-.detail-info .title { font-size: 20px; margin: 0 0 6px; word-break: break-word; }
+/* 顶栏返回按钮：仅详情视图显示，位于菜单按钮之后 */
+.topbar .back { flex: 0 0 auto; padding: 6px 10px; min-height: 34px; display: inline-flex; align-items: center; gap: 4px; }
+.detail-info .title { font-size: 20px; margin: 0 0 6px; word-break: break-all; }
+.detail-info .title .icon-act { font-size: 15px; vertical-align: baseline; }
 .detail-info .meta { display: flex; gap: 8px; flex-wrap: wrap; color: var(--muted); font-size: 13px; align-items: center; }
 .detail-body { min-height: 120px; }
+/* 文件列表上方操作条 */
+.body-toolbar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 10px; }
+/* 行内小图标按钮（标题后的 ✎、描述行末尾的 ♥） */
+.icon-act {
+    background: transparent; border: none; cursor: pointer; color: inherit;
+    font-size: 16px; line-height: 1; padding: 6px; min-width: 32px; min-height: 32px; border-radius: 6px;
+    display: inline-flex; align-items: center; justify-content: center;
+}
+.icon-act:hover { background: var(--bg); }
+.fav-heart { color: #c3c7cc; font-size: 18px; }
+.fav-heart.on { color: #e0566b; }
+.detail-info .meta .fav-heart { margin-left: 2px; }
 
 .video-layout { display: grid; grid-template-columns: minmax(0, 2fr) minmax(240px, 1fr); gap: 12px; }
 .video-stage { background: #000; border-radius: 10px; overflow: hidden; display: flex; align-items: center; justify-content: center; }
@@ -214,7 +228,7 @@ button.primary:disabled, button.ghost:disabled, button.danger:disabled { opacity
 .item-row .thumb { width: 44px; height: 44px; border-radius: 6px; object-fit: cover; background: #eee; flex: 0 0 44px; }
 .item-row .name-input { flex: 1 1 auto; min-width: 0; padding: 6px 8px; border: 1px solid var(--border); border-radius: 6px; font-size: 13px; min-height: 34px; }
 .item-row .media-badge { font-size: 11px; color: var(--muted); padding: 2px 6px; background: var(--bg); border-radius: 4px; }
-.item-row .icon-btn { background: transparent; border: 1px solid var(--border); border-radius: 6px; width: 32px; height: 32px; cursor: pointer; color: var(--fg); font-size: 14px; display: inline-flex; align-items: center; justify-content: center; }
+.item-row .icon-btn { background: transparent; border: 1px solid var(--border); border-radius: 6px; width: 32px; height: 32px; padding: 0; min-height: 0; cursor: pointer; color: var(--fg); font-size: 14px; display: inline-flex; align-items: center; justify-content: center; }
 .item-row .icon-btn:hover:not(:disabled) { background: var(--bg); }
 .item-row .icon-btn.danger { color: var(--danger); border-color: #f0c1c1; }
 .item-row .icon-btn.danger:hover:not(:disabled) { background: #fbe9e9; }
@@ -267,13 +281,17 @@ button.primary:disabled, button.ghost:disabled, button.danger:disabled { opacity
     .search { flex: 1 1 0; min-width: 0; max-width: none; }
     #uploadBtn { flex: 0 0 auto; padding: 8px 10px; white-space: nowrap; }
     .content { padding: 10px; }
-    .grid { grid-template-columns: 1fr; gap: 10px; }
-    /* 移动端卡片横向排列：封面固定宽度 · 标题/元信息在右 · 操作栏下方通栏 */
-    .card { flex-direction: row; flex-wrap: wrap; }
-    .card .cover { width: 140px; flex: 0 0 140px; aspect-ratio: 16 / 9; }
-    .card .card-body { flex: 1 1 0; min-width: 0; padding: 8px 10px; }
-    .card .card-actions { flex: 1 0 100%; order: 3; }
-    .card-actions .mini-btn { padding: 8px 12px; font-size: 13px; }
+    /* 移动端双列小卡 */
+    .grid { grid-template-columns: repeat(2, 1fr); gap: 8px; }
+    /* 移动端卡片：标题浮动在缩略图底部（白字 · 半透黑底）· 只显示标题 */
+    .card { position: relative; }
+    .card .card-body { position: absolute; left: 0; right: 0; bottom: 0; padding: 0; gap: 0; }
+    .card .card-title { color: #fff; background: rgba(0,0,0,.55); font-size: 12px; padding: 4px 8px; }
+    .card .card-meta { display: none; }
+    /* 小卡更高一档：封面 16:9 → 4:3 */
+    .card .cover { aspect-ratio: 4 / 3; }
+    /* 小卡不显示时长角标（双列小图上意义不大） */
+    .card .cover-badge { display: none; }
     .modal-body { width: 96vw; }
     /* 详情页：播放器在上 · 列表在下 */
     .video-layout { grid-template-columns: 1fr; }
