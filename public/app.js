@@ -115,11 +115,44 @@
         up: '<polyline points="18 15 12 9 6 15"/>',
         down: '<polyline points="6 9 12 15 18 9"/>',
         undo: '<polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/>',
+        grip: '<circle cx="9" cy="6" r="1.5"/><circle cx="9" cy="12" r="1.5"/><circle cx="9" cy="18" r="1.5"/><circle cx="15" cy="6" r="1.5"/><circle cx="15" cy="12" r="1.5"/><circle cx="15" cy="18" r="1.5"/>',
     }
     /** filled：爱心等需要“已选中实心”态的图标 */
     function icon(name, size, filled) {
         const s = size || 16
         return `<svg class="ic" width="${s}" height="${s}" viewBox="0 0 24 24" fill="${filled ? 'currentColor' : 'none'}" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICON_PATHS[name] || ''}</svg>`
+    }
+
+    // ---- 通用拖拽排序：Pointer Events · 鼠标与触屏均可用 · 按住把手才能拖 ----
+    // onReorder(rows) 在拖拽结束后收到容器内按新 DOM 顺序排列的行元素
+    function attachDragSort({ container, rowSel, handleSel, disabled, onReorder }) {
+        container.addEventListener('pointerdown', e => {
+            if (disabled && disabled()) return
+            const handle = e.target.closest(handleSel)
+            if (!handle) return
+            const row = handle.closest(rowSel)
+            if (!row || !container.contains(row)) return
+            e.preventDefault()
+            handle.setPointerCapture(e.pointerId)
+            row.classList.add('is-dragging')
+            const onMove = ev => {
+                const under = document.elementFromPoint(ev.clientX, ev.clientY)
+                const over = under && under.closest ? under.closest(rowSel) : null
+                // 不可拖入的排除行（如已标记删除的）用 data-nosort 标记
+                if (!over || over === row || !container.contains(over) || over.dataset.nosort) return
+                const r = over.getBoundingClientRect()
+                if (ev.clientY < r.top + r.height / 2) container.insertBefore(row, over)
+                else container.insertBefore(row, over.nextSibling)
+            }
+            const onUp = () => {
+                row.classList.remove('is-dragging')
+                handle.removeEventListener('pointermove', onMove)
+                onReorder(Array.from(container.children).filter(el => el.matches(rowSel)))
+            }
+            handle.addEventListener('pointermove', onMove)
+            handle.addEventListener('pointerup', onUp, { once: true })
+            handle.addEventListener('pointercancel', onUp, { once: true })
+        })
     }
 
     // ================= 路由 =================
@@ -274,7 +307,7 @@
                 ${it.agg && it.agg.durationSec ? `<span class="cover-badge dur">${fmtDur(it.agg.durationSec)}</span>` : ''}
             </div>
             <div class="card-body">
-                <div class="card-title" title="${escapeHtml(it.title || '')}">${kindIcon} ${escapeHtml(it.title || '')}</div>
+                <div class="card-title" title="${escapeHtml(it.title || '')}"><span class="kind-ic">${kindIcon}</span> ${escapeHtml(it.title || '')}</div>
                 <div class="card-meta">${meta.join('')}</div>
             </div>`
         card.addEventListener('click', () => gotoDetail(it.id))
@@ -386,8 +419,8 @@
         }
         if (state.itemEditorOpen) {
             body.appendChild(buildItemEditor())
-        } else if (state.viewMode === 'list' && d.items.some(it => it.mediaType === 'video')) {
-            // list 模式仅在“含至少一个视频”时有意义；纯图片强制用平铺
+        } else if (state.viewMode === 'list') {
+            // 手动切到列表模式的含图资源：图片项在播放器区展示为图片（点图进 Lightbox）
             body.appendChild(buildVideoLayout())
         } else {
             body.appendChild(buildAlbumGrid())
@@ -406,7 +439,8 @@
         wrap.appendChild(stage)
 
         const list = document.createElement('div'); list.className = 'video-playlist'
-        list.innerHTML = `<header>播放列表 · ${d.items.length} 个</header>`
+        const hasVideo = d.items.some(it => it.mediaType === 'video')
+        list.innerHTML = `<header>${hasVideo ? '播放列表' : '文件列表'} · ${d.items.length} 个</header>`
         const ol = document.createElement('ol')
         d.items.forEach((it, i) => {
             const li = document.createElement('li')
@@ -557,9 +591,19 @@
         $('#confirmOk').onclick = async () => {
             try {
                 await api(`/api/collections/${d.id}`, { method: 'DELETE' })
+                removeItemFromList(d.id)
                 closeModal('confirmModal'); toast('已删除'); gotoList()
             } catch (e) { toast('删除失败：' + e.message) }
         }
+    }
+    /** 删除成功后同步当前列表：移除数据项与 DOM 卡片，避免返回后残留 */
+    function removeItemFromList(id) {
+        state.list = state.list.filter(x => String(x.id) !== String(id))
+        state.total = Math.max(0, (state.total || 1) - 1)
+        const el = $(`#grid .card[data-id="${id}"]`)
+        if (el) el.remove()
+        const emptyEl = $('#empty')
+        if (state.list.length === 0) { emptyEl.classList.remove('hidden'); emptyEl.textContent = '内容已全部删除' }
     }
 
     // ================= item 编辑器（重命名 / 删除 / 排序 / 追加）=================
@@ -612,7 +656,7 @@
         const wrap = document.createElement('div'); wrap.className = 'item-editor'
 
         const head = document.createElement('div'); head.className = 'item-editor-foot'
-        head.innerHTML = `<span class="hint">修改显示名 · 删除 · 排序 · 保存后写回服务器</span>`
+        head.innerHTML = `<span class="hint">修改显示名 · 删除 · 按住左侧把手拖动排序（或用上下按钮）· 保存后写回服务器</span>`
         wrap.appendChild(head)
 
         const rowsEl = document.createElement('div')
@@ -633,6 +677,8 @@
 
         function buildItemRow(it, idxInArray, st, rerender) {
             const row = document.createElement('div'); row.className = 'item-row' + (st.deleted ? ' is-deleted' : '')
+            row.dataset.id = String(it.id)
+            if (st.deleted) row.dataset.nosort = '1'
             const m = it.meta
             const mediaTags = [it.mediaType === 'video' ? '视频' : '图片']
             if (m) {
@@ -643,6 +689,7 @@
             mediaTags.push(fmtSize(it.size))
             row.innerHTML = `
                 <span class="idx"></span>
+                ${st.deleted ? '' : `<span class="icon-btn drag-handle" title="按住拖动排序">${icon('grip', 14, true)}</span>`}
                 <img class="thumb" loading="lazy" src="${itemThumbUrl(it.id)}" alt="">
                 <input class="name-input" type="text" value="${escapeHtml(st.name ?? '')}" placeholder="${escapeHtml(it.originalName)}" ${st.deleted ? 'disabled' : ''}>
                 <span class="media-badge">${mediaTags.join(' · ')}</span>
@@ -685,6 +732,17 @@
         }
 
         renderRows()
+        // 拖拽排序：拖完把 DOM 顺序同步回 d.items 并重建行（修复上下按钮闭包索引）
+        attachDragSort({
+            container: rowsEl,
+            rowSel: '.item-row',
+            handleSel: '.drag-handle',
+            onReorder: rows => {
+                const order = rows.map(r => r.dataset.id)
+                d.items.sort((a, b) => order.indexOf(String(a.id)) - order.indexOf(String(b.id)))
+                renderRows()
+            },
+        })
         wrap.appendChild(rowsEl)
 
         // 追加区域
@@ -736,10 +794,11 @@
         const drop = $('#dropArea'), input = $('#upFiles'), listEl = $('#fileList')
         const bar = $('#upBar'), fill = $('#upBarFill'), prog = $('#upProgress')
         const sepChk = $('#upSeparate')
+        let submitting = false // 上传进行中：锁定拖拽排序，避免索引错位
         // 逐文件状态：每个文件对应一行，行末一个状态 span
         function refreshList() {
             listEl.innerHTML = files.map((f, i) =>
-                `<div class="up-row"><span class="up-name">${escapeHtml(f.name)} · ${fmtSize(f.size)}</span>` +
+                `<div class="up-row" data-i="${i}"><span class="up-handle">${icon('grip', 14, true)}</span><span class="up-name">${escapeHtml(f.name)} · ${fmtSize(f.size)}</span>` +
                 `<span class="up-status" data-i="${i}">待上传</span></div>`).join('')
         }
         function setStatus(i, text, cls) {
@@ -756,6 +815,19 @@
             prog.textContent = '上传中 ' + Math.round(pct * 100) + '%'
         }
         function addFiles(fs) { for (const f of fs) files.push(f); refreshList() }
+        // 提交前可拖拽调整文件顺序 → items 按此顺序入库（首个文件决定封面）
+        attachDragSort({
+            container: listEl,
+            rowSel: '.up-row',
+            handleSel: '.up-handle',
+            disabled: () => submitting,
+            onReorder: rows => {
+                const byIdx = new Map(files.map((f, i) => [i, f]))
+                files.length = 0
+                for (const r of rows) files.push(byIdx.get(Number(r.dataset.i)))
+                refreshList()
+            },
+        })
         input.addEventListener('change', () => { addFiles(Array.from(input.files || [])); input.value = '' })
         ;['dragenter', 'dragover'].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.add('drag') }))
         ;['dragleave', 'drop'].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.remove('drag') }))
@@ -776,7 +848,7 @@
 
         $('#upSubmit').addEventListener('click', () => {
             if (!files.length) return toast('请先选择文件')
-            const btn = $('#upSubmit'); btn.disabled = true
+            const btn = $('#upSubmit'); btn.disabled = true; submitting = true
             if (sepChk.checked) uploadSeparate(btn)
             else uploadCombined(btn)
         })
@@ -807,10 +879,11 @@
                     toast('上传失败：' + ((j && j.message) || ('HTTP ' + xhr.status)))
                 }
                 btn.disabled = false
+                submitting = false
             }
             xhr.onerror = () => {
                 setAllStatus('失败', 'fail'); prog.textContent = ''
-                toast('上传失败：网络错误'); btn.disabled = false
+                toast('上传失败：网络错误'); btn.disabled = false; submitting = false
             }
             xhr.send(fd)
         }
@@ -827,7 +900,7 @@
 
             const next = () => {
                 if (idx >= total) {
-                    btn.disabled = false
+                    btn.disabled = false; submitting = false
                     fill.style.width = '100%'
                     prog.textContent = `完成 ${okCount}/${total}` + (failCount ? `，失败 ${failCount}` : '')
                     if (okCount > 0) {

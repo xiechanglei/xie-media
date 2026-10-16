@@ -133,6 +133,14 @@ button.primary:disabled, button.ghost:disabled, button.danger:disabled { opacity
     background: transparent; color: var(--danger); border: 1px solid #f0c1c1;
     padding: 6px 10px; font-size: 12px; min-height: 34px;
 }
+/* 拖拽排序：把手（触屏靠 touch-action:none 阻止页面滚动）+ 拖动中行高亮 */
+.drag-handle { cursor: grab; touch-action: none; user-select: none; color: var(--muted); }
+.drag-handle:active { cursor: grabbing; }
+.item-row .drag-handle { cursor: grab; }
+.up-handle { display: inline-flex; align-items: center; flex: 0 0 auto; cursor: grab; touch-action: none; user-select: none; color: var(--muted); }
+.up-handle:active { cursor: grabbing; }
+/* 拖动中的行必须忽略指针命中：否则 elementFromPoint 永远命中被拖行自身，无法与目标行交换 */
+.is-dragging { opacity: .65; background: var(--primary-soft); border-radius: 8px; pointer-events: none; }
 
 /* ============ 弹层 ============ */
 .modal { position: fixed; inset: 0; z-index: 100; display: flex; align-items: center; justify-content: center; }
@@ -288,6 +296,8 @@ button.primary:disabled, button.ghost:disabled, button.danger:disabled { opacity
     .card .card-body { position: absolute; left: 0; right: 0; bottom: 0; padding: 0; gap: 0; }
     .card .card-title { color: #fff; background: rgba(0,0,0,.55); font-size: 12px; padding: 4px 8px; }
     .card .card-meta { display: none; }
+    /* 双列小卡标题前的类型 emoji 隐藏（桌面端保留） */
+    .card .kind-ic { display: none; }
     /* 小卡更高一档：封面 16:9 → 4:3 */
     .card .cover { aspect-ratio: 4 / 3; }
     /* 小卡不显示时长角标（双列小图上意义不大） */
