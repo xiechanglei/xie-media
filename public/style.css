@@ -230,6 +230,10 @@ button.danger {
 button.danger:hover { transform: translateY(-1px); filter: brightness(1.06); }
 button.primary:disabled, button.ghost:disabled, button.danger:disabled { opacity: .45; cursor: not-allowed; transform: none; box-shadow: none; }
 
+/* ============ 详情视图：无侧栏、无顶栏的沉浸模式，内容全宽全高 ============ */
+body.detail-mode .sidebar,
+body.detail-mode .topbar { display: none; }
+
 /* ============ 主内容 ============ */
 .content { padding: 20px; flex: 1 1 auto; }
 .grid {
@@ -390,10 +394,6 @@ button.primary:disabled, button.ghost:disabled, button.danger:disabled { opacity
 
 /* ============ 详情页 ============ */
 .detail { display: flex; flex-direction: column; gap: 16px; }
-.topbar .back {
-    flex: 0 0 auto; padding: 6px 12px; min-height: 34px; display: inline-flex; align-items: center; gap: 4px;
-    border-radius: 9px; font-size: 13px;
-}
 .detail-info .title { font-size: 24px; margin: 0 0 10px; word-break: break-all; font-weight: 700; letter-spacing: .3px; }
 .detail-info .title .icon-act { font-size: 15px; vertical-align: baseline; }
 .detail-info .meta { display: flex; gap: 10px; flex-wrap: wrap; color: var(--muted); font-size: 13px; align-items: center; }
@@ -613,9 +613,10 @@ body.has-select-bar .content { padding-bottom: 84px; }
     .sidebar {
         position: fixed; top: 0; left: 0; height: 100vh; z-index: 30;
         transform: translateX(-100%); transition: transform .28s var(--ease-pop);
-        box-shadow: 8px 0 40px rgba(0,0,0,.5);
+        /* 阴影只在展开时挂上：收起后元素整体移出屏幕，若阴影常驻仍会侵入左缘 */
+        box-shadow: none;
     }
-    .sidebar.open { transform: translateX(0); }
+    .sidebar.open { transform: translateX(0); box-shadow: 8px 0 40px rgba(0,0,0,.5); }
     .menu-toggle { display: inline-flex; }
     .main { width: 100%; }
     .topbar { padding: 8px 12px; gap: 8px; flex-wrap: nowrap; }
@@ -623,20 +624,35 @@ body.has-select-bar .content { padding-bottom: 84px; }
     .search { flex: 1 1 0; min-width: 0; max-width: none; }
     #uploadBtn { flex: 0 0 auto; padding: 8px 12px; white-space: nowrap; }
     .content { padding: 10px; }
-    /* 移动端单列列表：隐藏封面，仅标题 + 描述 */
-    .grid { grid-template-columns: 1fr; gap: 10px; }
-    .card { border-left: 3px solid transparent; border-image: var(--grad) 1; border-radius: 0 10px 10px 0; }
-    .card .cover-wrap { display: none; }
-    .card .card-body { padding: 13px 14px; gap: 8px; min-width: 0; }
-    .card .card-title { font-size: 16px; white-space: normal; word-break: break-all; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
+    /* 移动端横向列表行：左侧缩略图 + 右侧标题/描述，去掉卡片边框与圆角 */
+    .grid { grid-template-columns: 1fr; gap: 0; }
+    .card {
+        flex-direction: row; align-items: center; gap: 12px;
+        border: none; border-radius: 0; box-shadow: none; background: transparent;
+        padding: 10px 12px; animation: none;
+    }
+    /* 用行底部分隔线代替卡片框，仅末行不画 */
+    .card:not(:last-child) { border-bottom: 1px solid var(--border); }
+    .card:hover { transform: none; box-shadow: none; background: var(--hover); }
+    /* 封面即缩略图：固定尺寸铺在左侧 */
+    .card .cover-wrap { display: block; flex: 0 0 100px; width: 100px; height: 66px; border-radius: 6px; }
+    .card .cover { width: 100%; height: 100%; aspect-ratio: auto; }
+    .card:hover .cover { transform: none; }
+    .card .cover-badge { display: none; }
+    .card .card-body { flex: 1 1 auto; min-width: 0; padding: 0; gap: 6px; }
+    .card .card-title { font-size: 15px; white-space: normal; word-break: break-all; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
     .card .card-meta { font-size: 12px; gap: 6px; flex-wrap: nowrap; align-items: center; overflow: hidden; white-space: nowrap; }
     .card .card-meta .badge { flex: 0 0 auto; display: inline-flex; align-items: center; }
     .card .card-meta .count-seg, .card .card-meta .meta-text { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .card .card-meta .fav-ic { margin-left: auto; flex: 0 0 auto; }
     .card .kind-ic { display: none; }
-    /* 移动端骨架屏对齐单列样式 */
-    .card.skeleton .sk-cover { display: none; }
-    .card.skeleton .sk-body { padding: 14px; }
+    /* 选中态：左侧渐变指示条 + 淡底，不再依赖边框 */
+    .card.selected { border: none; box-shadow: inset 3px 0 0 var(--primary); background: var(--grad-soft); }
+    .card.selected:not(:last-child) { border-bottom: 1px solid var(--border); }
+    /* 移动端骨架屏对齐横向列表行 */
+    .card.skeleton { flex-direction: row; align-items: center; gap: 12px; padding: 10px 12px; border: none; }
+    .card.skeleton .sk-cover { display: block; flex: 0 0 100px; width: 100px; height: 66px; aspect-ratio: auto; border-radius: 6px; }
+    .card.skeleton .sk-body { flex: 1 1 auto; padding: 0; }
     .modal-body { width: 96vw; border-radius: 16px; }
     .select-bar { gap: 6px; padding: 8px 10px calc(8px + env(safe-area-inset-bottom)); }
     .select-bar .mini-btn { padding: 5px 8px; min-height: 32px; }

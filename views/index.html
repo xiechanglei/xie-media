@@ -70,7 +70,6 @@
     <div class="main">
         <header class="topbar">
             <button id="menuToggle" class="menu-toggle" type="button" aria-label="菜单"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg></button>
-            <button id="detailBack" class="ghost back hidden" type="button"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg><span>返回</span></button>
             <input id="searchInput" class="search" type="search" placeholder="搜索标题 / 分类"/>
             <div class="grow"></div>
             <button id="selectBtn" class="ghost hidden" type="button" title="多选合并">选择</button>
@@ -87,7 +86,7 @@
             <div id="empty" class="empty hidden">还没有内容</div>
         </main>
 
-        <!-- 详情视图（点击卡片后展示；返回按钮在顶栏，操作图标分散到标题/描述/列表上方）-->
+        <!-- 详情视图（无顶栏无侧栏的沉浸模式；桌面端在新标签页打开，移动端用浏览器返回）-->
         <main class="content detail hidden" id="detailView">
             <div class="detail-info" id="detailInfo"></div>
             <div class="detail-body" id="detailBody"></div>

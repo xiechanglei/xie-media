@@ -289,6 +289,7 @@
         if (route.view === 'detail') {
             if (state.selectMode) exitSelectMode(false) // 进详情前先退出多选态
             state.view = 'detail'
+            document.body.classList.add('detail-mode') // 详情为沉浸模式：隐藏侧栏与汉堡，顶栏亮出用户胶囊
             if (!$('#detailView').classList.contains('hidden')) stopDetailPlayback() // 详情 A → 详情 B 也先销毁旧播放器
             $('#listView').classList.add('hidden')
             $('#detailView').classList.remove('hidden')
@@ -299,6 +300,7 @@
             const scopeChanged = route.scope && route.scope !== state.scope
             if (state.view === 'detail') stopDetailPlayback()
             state.view = 'list'
+            document.body.classList.remove('detail-mode')
             state.scope = route.scope || state.scope
             if (scopeChanged && state.selectMode) exitSelectMode(false) // 切范围时清理选择态
             $('#detailView').classList.add('hidden')
@@ -314,15 +316,21 @@
         const target = buildListHash(scope || state.scope)
         if (location.hash === target) applyRoute(parseHash()); else location.hash = target
     }
-    function gotoDetail(id) { location.hash = `#/c/${id}` }
+    /** 详情打开方式：桌面端新标签页（列表标签页的数据与滚动位置原封不动保留），
+     *  移动端沿用页内 hash 路由（手机上新标签体验差，列表变更由就地修补兑底） */
+    function gotoDetail(id) {
+        const hash = '#/c/' + id
+        if (window.matchMedia('(max-width: 768px)').matches) { location.hash = hash; return }
+        window.open(location.pathname + location.search + hash, '_blank')
+    }
     function hideTopbarListOnly() {
         $('#searchInput').classList.add('hidden')
         $('#uploadBtn').classList.add('hidden')
-        $('#detailBack').classList.remove('hidden')
+        // 详情为无顶栏沉浸模式（detail-mode 下顶栏整体隐藏），不再提供页内返回按钮：
+        // 桌面端在新标签页打开、关标签即回；移动端同页路由用浏览器返回
     }
     function showTopbarListOnly() {
         $('#searchInput').classList.remove('hidden')
-        $('#detailBack').classList.add('hidden')
         syncUploadBtnVisible()
     }
 
@@ -334,6 +342,57 @@
             const next = document.documentElement.dataset.theme === 'light' ? 'dark' : 'light'
             document.documentElement.dataset.theme = next
             try { localStorage.setItem('xm-theme', next) } catch { }
+        })
+    }
+
+    // ================= 跨标签页 / 视图间列表同步 =================
+    // 详情在新标签页操作后，通过 BroadcastChannel 把变更实时应用到列表标签页；
+    // 不支持 BC 的老内核降级为 localStorage + storage 事件（同样不回流发送页）
+    const listBC = 'BroadcastChannel' in window ? new BroadcastChannel('xm-list-sync') : null
+    function notifyList(msg) {
+        if (listBC) { listBC.postMessage(msg); return }
+        try { localStorage.setItem('xm-list-sync', JSON.stringify(Object.assign({ _t: Date.now() }, msg))) } catch { }
+    }
+    /** 就地修补列表卡片：收藏心形 / 可见性徽章（数据 + DOM 同步） */
+    function syncCardFav(id, fv) {
+        const it = state.list.find(x => String(x.id) === String(id)); if (it) it.favorited = fv
+        const f = $(`#grid .card[data-id="${id}"] .fav-ic`)
+        if (f) { f.classList.toggle('on', !!fv); f.innerHTML = icon('heart', 13, fv) }
+    }
+    function syncCardVis(id, vis) {
+        const it = state.list.find(x => String(x.id) === String(id)); if (it) it.visibility = vis
+        const b = $(`#grid .card[data-id="${id}"] .badge`)
+        if (b) { b.className = 'badge ' + vis; b.textContent = vis === 'public' ? '公开' : '私有' }
+    }
+    /** 收藏变更在当前列表范围内的完整语义：收藏页取消收藏→卡片退出列表 */
+    function applyFavChange(id, fv) {
+        if (state.scope === 'favorites' && !fv) removeItemFromList(id)
+        else syncCardFav(id, fv)
+    }
+    /** 可见性变更：广场只显示公开项，转私有即退出广场列表 */
+    function applyVisChange(id, vis) {
+        if (state.scope === 'plaza' && vis !== 'public') removeItemFromList(id)
+        else syncCardVis(id, vis)
+    }
+    let pendingDirty = false // 列表页隐藏时收到“结构变更”，推迟到切回前台再重拉
+    function initListSync() {
+        const apply = msg => {
+            if (!msg) return
+            if (msg.type === 'del') return removeItemFromList(msg.id)
+            if (msg.type === 'fav') return applyFavChange(msg.id, msg.favorited)
+            if (msg.type === 'vis') return applyVisChange(msg.id, msg.visibility)
+            if (msg.type === 'dirty') {
+                if (state.view !== 'list') return
+                if (document.hidden) { pendingDirty = true; return }
+                reset()
+            }
+        }
+        if (listBC) listBC.addEventListener('message', e => apply(e.data))
+        else window.addEventListener('storage', e => {
+            if (e.key === 'xm-list-sync' && e.newValue) { try { apply(JSON.parse(e.newValue)) } catch { } }
+        })
+        document.addEventListener('visibilitychange', () => {
+            if (!document.hidden && pendingDirty) { pendingDirty = false; reset() }
         })
     }
 
@@ -354,18 +413,18 @@
         $('#overlay').addEventListener('click', closeDrawer)
     }
 
-    // ================= 顶栏（搜索 / 登出 / 回顶 / 详情返回）=================
+    // ================= 顶栏（搜索 / 登出 / 回顶）=================
+    async function doLogout() {
+        try { await fetch('/auth/api/logout', { method: 'POST', credentials: 'same-origin' }) } catch { }
+        if (window.XieAuth?.logout) window.XieAuth.logout(); else location.href = '/auth/login.html'
+    }
     function initTopbar() {
         let kwTimer
-        $('#detailBack').addEventListener('click', () => gotoList())
         $('#searchInput').addEventListener('input', e => {
             clearTimeout(kwTimer)
             kwTimer = setTimeout(() => { state.keyword = e.target.value.trim(); reset() }, 300)
         })
-        $('#logoutBtn').addEventListener('click', async () => {
-            try { await fetch('/auth/api/logout', { method: 'POST', credentials: 'same-origin' }) } catch { }
-            if (window.XieAuth?.logout) window.XieAuth.logout(); else location.href = '/auth/login.html'
-        })
+        $('#logoutBtn').addEventListener('click', doLogout)
         // 回到顶部
         const back = $('#backToTop')
         window.addEventListener('scroll', () => {
@@ -384,6 +443,24 @@
             </div>`).join('')
     }
     function clearSkeleton() { $$('#grid .skeleton').forEach(el => el.remove()) }
+    /** 空态提示文案随 scope 变化；列表长度变动后都过一遍 */
+    function syncEmptyState() {
+        const emptyEl = $('#empty')
+        if (state.list.length === 0) {
+            emptyEl.classList.remove('hidden')
+            emptyEl.textContent = state.scope === 'mine'
+                ? '还没有内容，点击右上"＋ 上传"开始'
+                : (state.scope === 'favorites' ? '还没有收藏，去广场或我的里挑一个吧' : '广场暂时是空的')
+        } else emptyEl.classList.add('hidden')
+    }
+    /** 补位拉取：哨兵仍在视口附近且还有更多时继续下一页。
+     *  PC 大屏上一页 24 条撑不满屏幕时没有滚动条，IntersectionObserver 只在相交状态
+     *  “变化”时触发，哨兵一直可见就不会再回调，必须主动续拉 */
+    function fillViewport() {
+        if (state.view !== 'list' || state.loading || !state.hasMore) return
+        const r = $('#sentinel').getBoundingClientRect()
+        if (r.top < window.innerHeight + 400) load()
+    }
     function reset() {
         state.page = 0; state.list = []; state.hasMore = true; state.total = 0
         showSkeleton()
@@ -408,15 +485,9 @@
             renderAppend(newList)
             $('#endMsg').classList.toggle('hidden', state.hasMore || state.list.length === 0)
             if (state.selectMode) updateSelectBar()
-            const emptyEl = $('#empty')
-            if (state.list.length === 0) {
-                emptyEl.classList.remove('hidden')
-                emptyEl.textContent = state.scope === 'mine'
-                    ? '还没有内容，点击右上"＋ 上传"开始'
-                    : (state.scope === 'favorites' ? '还没有收藏，去广场或我的里挑一个吧' : '广场暂时是空的')
-            } else emptyEl.classList.add('hidden')
+            syncEmptyState()
         } catch (e) { toast('加载失败：' + e.message); state.hasMore = false }
-        finally { state.loading = false; clearSkeleton(); $('#loading').classList.add('hidden') }
+        finally { state.loading = false; clearSkeleton(); $('#loading').classList.add('hidden'); requestAnimationFrame(fillViewport) }
     }
     function renderAppend(items) {
         const grid = $('#grid')
@@ -464,10 +535,9 @@
             const chk = document.createElement('span'); chk.className = 'select-check'; chk.innerHTML = icon('check', 14)
             card.appendChild(chk)
             if (state.selected.has(String(it.id))) card.classList.add('selected')
-            card.addEventListener('click', () => toggleSelect(it.id))
-        } else {
-            card.addEventListener('click', () => gotoDetail(it.id))
         }
+        // 点击行为不在此绑定：由 #grid 事件委托按 selectMode 分流，
+        // 这样批量操作后就地修补的卡片无需重建也能正确响应
         return card
     }
 
@@ -571,12 +641,19 @@
             closeModal('mergeModal')
             exitSelectMode(false)
             toast(`已合并 ${ids.length} 个资源`)
+            notifyList({ type: 'dirty' }) // 其它列表标签页同步刷新
             gotoList('mine'); reset()
         } catch (e) {
             toast('合并失败：' + e.message)
         } finally { btn.disabled = false }
     }
     function initSelection() {
+        // 网格事件委托：卡片点击按当前模式路由详情/切换选中
+        $('#grid').addEventListener('click', e => {
+            const card = e.target.closest('.card')
+            if (!card || card.classList.contains('skeleton')) return
+            if (state.selectMode) toggleSelect(card.dataset.id); else gotoDetail(card.dataset.id)
+        })
         $('#selectBtn').addEventListener('click', enterSelectMode)
         $('#selCancel').addEventListener('click', () => exitSelectMode())
         $('#selSelectAll').addEventListener('click', toggleSelectAll)
@@ -602,12 +679,49 @@
             const res = (j && j.data) || {}
             const done = res.done || 0, failed = res.failed || []
             closeModal('confirmModal')
+            // 把结果同步到内存数据与卡片 DOM（不重新拉取、不重建网格）
+            const failedSet = new Set(failed.map(String))
+            applyBatchResult(op, ids.filter(id => !failedSet.has(String(id))))
             toast(failed.length
                 ? `${BATCH_LABELS[op]}：成功 ${done}，失败 ${failed.length}`
                 : `已${BATCH_LABELS[op]} ${done} 个资源`)
-            exitSelectMode(false)
-            reset() // 重拉首页：徽章/心形/列表成员都随操作变化
+            exitSelectMode(false) // applyBatchResult 已就地清理选中态，无需重建
+            notifyList({ type: 'dirty' }) // 本页已本地同步；通知其它列表标签页重拉
         } catch (e) { toast('操作失败：' + e.message) }
+    }
+    /** 批量操作结果本地化：更新 state.list 数据 + 精准修补对应卡片 */
+    function applyBatchResult(op, okIds) {
+        // 从当前列表移除的场景：删除；在收藏范围取消收藏（列表只存收藏项，需同步退出）
+        const remove = op === 'delete' || (op === 'unfav' && state.scope === 'favorites')
+        for (const id of okIds) {
+            const it = state.list.find(x => String(x.id) === String(id))
+            const card = $(`#grid .card[data-id="${id}"]`)
+            if (remove) {
+                if (card) card.remove()
+                if (it) state.list = state.list.filter(x => x !== it)
+                state.total = Math.max(0, (state.total || 1) - 1)
+                continue
+            }
+            if (op === 'public' || op === 'private') {
+                if (it) it.visibility = op
+                const b = card && card.querySelector('.badge')
+                if (b) { b.className = 'badge ' + op; b.textContent = op === 'public' ? '公开' : '私有' }
+            } else if (op === 'fav' || op === 'unfav') {
+                const fv = op === 'fav'
+                if (it) it.favorited = fv
+                const f = card && card.querySelector('.fav-ic')
+                if (f) { f.classList.toggle('on', fv); f.innerHTML = icon('heart', 13, fv) }
+            }
+        }
+        // 清除选中遗留：高亮描边与左上角对钩，卡片恢复普通浏览态
+        $$('#grid .card').forEach(c => {
+            c.classList.remove('selected')
+            const chk = c.querySelector('.select-check'); if (chk) chk.remove()
+        })
+        $('#endMsg').classList.toggle('hidden', state.hasMore || state.list.length === 0)
+        syncEmptyState()
+        // 卡片变少后可能不再构成滚动条件，主动补位拉取
+        requestAnimationFrame(fillViewport)
     }
     /** 批量删除前用通用确认弹层兑一道 */
     function confirmBatchDelete() {
@@ -632,6 +746,8 @@
             for (const en of entries) if (en.isIntersecting && state.view === 'list') load()
         }, { root: null, rootMargin: '400px', threshold: 0 })
         io.observe(sentinel)
+        // 窗口拉大时哨兵可能本就可见但不会发生状态变化，随 resize 主动补位
+        window.addEventListener('resize', () => requestAnimationFrame(fillViewport))
     }
 
     // ================= 详情页 =================
@@ -859,8 +975,9 @@
         if (act === 'edit-items') return toggleItemEditor()
         if (act === 'del') return confirmDelete(d)
     }
-    /** 详情页操作后标记列表脏，返回时由 applyRoute 重新拉取 */
-    function markListDirty() { state.listDirty = true }
+    /** 详情页操作后标记列表脏（同页路由返回时重拉），并通知其它列表标签页；
+     *  仅“难以局部模拟”的变更用（元信息/文件增删）；收藏/可见性/删除走就地修补，不经过这里 */
+    function markListDirty() { state.listDirty = true; notifyList({ type: 'dirty' }) }
     async function toggleFav(d, btn) {
         const wasFav = d.favorited
         try {
@@ -874,7 +991,9 @@
                 })
             }
             d.favorited = !wasFav
-            markListDirty()
+            // 就地修补列表数据与卡片，不再标脏重拉（同页返回不刷新列表）
+            applyFavChange(d.id, d.favorited)
+            notifyList({ type: 'fav', id: d.id, favorited: d.favorited })
             if (btn) {
                 btn.classList.toggle('on', d.favorited)
                 btn.innerHTML = icon('heart', 18, d.favorited)
@@ -892,7 +1011,8 @@
             })
             toast(next === 'public' ? '已开放到广场' : '已设为私有')
             d.visibility = next
-            markListDirty()
+            applyVisChange(d.id, next)
+            notifyList({ type: 'vis', id: d.id, visibility: next })
             // 可见性只影响徽章与操作条文案：局部更新，不重建播放器
             renderDetailInfo()
             const visBtn = $('#detailBody .body-toolbar button[data-act="vis"]')
@@ -927,7 +1047,9 @@
             try {
                 await api(`/api/collections/${d.id}`, { method: 'DELETE' })
                 removeItemFromList(d.id)
-                closeModal('confirmModal'); toast('已删除'); gotoList()
+                notifyList({ type: 'del', id: d.id })
+                closeModal('confirmModal'); toast('已删除')
+                if (window.opener) window.close(); else gotoList()
             } catch (e) { toast('删除失败：' + e.message) }
         }
     }
@@ -1342,6 +1464,7 @@
     // ================= 入口 =================
     document.addEventListener('DOMContentLoaded', async () => {
         initTheme()
+        initListSync()
         await loadUser()
         initSidebar()
         initTopbar()
