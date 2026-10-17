@@ -172,20 +172,43 @@
 
 <div id="toast" class="toast" role="status" aria-live="polite"><span class="toast-ic"></span><span class="toast-msg"></span></div>
 
-<!-- 多选模式底部操作栏：三个视图均可用，按 scope 显隐不用的动作 -->
+<!-- 多选模式操作栏：桌面底部横栏，移动端改为右侧浮动竖向 dock；三个视图均可用，按 scope 显隐不适用的动作 -->
 <div id="selectBar" class="select-bar hidden">
     <span class="sel-count" id="selCount">已选 0 项</span>
+    <span class="sel-count-mini" id="selCountMini">0</span>
     <button id="selSelectAll" class="mini-btn" type="button">全选</button>
     <div class="grow"></div>
     <span class="sel-actions">
         <button id="selMerge" class="mini-btn" type="button" disabled>合并</button>
         <button id="selPublic" class="mini-btn" type="button" disabled>公开</button>
         <button id="selPrivate" class="mini-btn" type="button" disabled>私有</button>
+        <button id="selTransfer" class="mini-btn" type="button" disabled>送人</button>
         <button id="selDelete" class="mini-btn danger" type="button" disabled>删除</button>
         <button id="selFav" class="mini-btn" type="button" disabled>收藏</button>
         <button id="selUnfav" class="mini-btn" type="button" disabled>取消收藏</button>
     </span>
     <button id="selCancel" class="mini-btn" type="button">取消</button>
+</div>
+
+<!-- 送人弹层：把选中资源的所有权转交给其他用户，转交后自动变为私有 -->
+<div id="transferModal" class="modal hidden" role="dialog">
+    <div class="modal-mask"></div>
+    <div class="modal-body">
+        <div class="modal-head">
+            <h3>送人</h3>
+            <button class="close" data-close="transferModal" type="button">×</button>
+        </div>
+        <div class="merge-summary" id="transferSummary"></div>
+        <div class="form-row">
+            <label>送给 <select id="transferUser"><option value="">加载中…</option></select></label>
+        </div>
+        <div class="merge-warn">送出后资源归对方所有，并自动设为私有；你将不再拥有该资源，此操作不可撤销。</div>
+        <div class="modal-foot">
+            <div class="grow"></div>
+            <button class="ghost" data-close="transferModal" type="button">取消</button>
+            <button id="transferSubmit" class="primary" type="button">确定送出</button>
+        </div>
+    </div>
 </div>
 
 <!-- 合并弹层：确认将选中的多个资源归并为一个新资源 -->

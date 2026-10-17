@@ -354,11 +354,22 @@ body.detail-mode .topbar { display: none; }
 .form-row + .form-row { padding-top: 10px; }
 .form-row label { display: flex; flex-direction: column; gap: 6px; font-size: 13px; color: var(--muted); flex: 1 1 180px; }
 .form-row label.radio { flex-direction: row; align-items: center; gap: 8px; flex: 0 0 auto; cursor: pointer; }
-.form-row input[type="text"], .form-row input[type="search"] {
+.form-row input[type="text"], .form-row input[type="search"], .form-row select {
     padding: 9px 12px; border-radius: 10px; border: 1px solid var(--border); font-size: 14px; min-height: var(--tap);
     background: var(--card-2); color: var(--fg); outline: none; transition: border-color .2s, box-shadow .2s;
 }
-.form-row input[type="text"]:focus, .form-row input[type="search"]:focus { border-color: var(--primary); box-shadow: 0 0 0 3px rgba(124,107,255,.2); }
+/* 下拉框：收起原生箭头，自绘一枚并留足右边距（34px 文字区 + 箭头距右 12px），不让箭头贴边 */
+.form-row select {
+    cursor: pointer;
+    appearance: none; -webkit-appearance: none; padding-right: 34px;
+    background-repeat: no-repeat; background-position: right 12px center; background-size: 12px 12px;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%238b93a8' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E");
+}
+/* 浅色主题下换深一档的箭头色（data URI 不继承 currentColor，只能分主题写）*/
+html[data-theme="light"] .form-row select {
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%2366708a' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E");
+}
+.form-row input[type="text"]:focus, .form-row input[type="search"]:focus, .form-row select:focus { border-color: var(--primary); box-shadow: 0 0 0 3px rgba(124,107,255,.2); }
 .form-row input[type="checkbox"] { accent-color: var(--primary); width: 16px; height: 16px; }
 
 .drop {
@@ -572,6 +583,8 @@ body.detail-mode .topbar { display: none; }
 }
 @keyframes barUp { from { transform: translateY(100%); } to { transform: none; } }
 .select-bar .sel-count { font-size: 13px; color: var(--fg); font-weight: 600; }
+/* 竖向浮动 dock 用的紧凑计数徽章（桌面隐藏，见移动端样式块）*/
+.select-bar .sel-count-mini { display: none; }
 .select-bar .sel-actions { display: inline-flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 body.has-select-bar .content { padding-bottom: 84px; }
 .merge-summary { padding: 16px 20px 0; font-size: 13px; color: var(--fg); }
@@ -640,9 +653,36 @@ body.has-select-bar .content { padding-bottom: 84px; }
     .card.skeleton .sk-cover { display: block; flex: 0 0 100px; width: 100px; height: 66px; aspect-ratio: auto; border-radius: 6px; }
     .card.skeleton .sk-body { flex: 1 1 auto; padding: 0; }
     .modal-body { width: 96vw; border-radius: 16px; }
-    .select-bar { gap: 6px; padding: 8px 10px calc(8px + env(safe-area-inset-bottom)); }
-    .select-bar .mini-btn { padding: 5px 8px; min-height: 32px; }
-    body.has-select-bar .content { padding-bottom: 136px; }
+    /* 选择模式：底部横栏装不下这么多动作（合并/公开/私有/送人/删除…），
+       改为靠右浮动的竖向 dock：纵向排列、屏幕高度居中，顶部一个紧凑计数 */
+    .select-bar {
+        left: auto; right: 10px; top: 50%; bottom: auto;
+        transform: translateY(-50%);
+        flex-direction: column; align-items: stretch; gap: 6px;
+        width: 68px; max-height: 82vh; overflow-y: auto;
+        padding: 10px 8px; border-radius: 16px;
+        /* 浮层形态：四边描边而不是桌面那条顶部分隔线 */
+        border: 1px solid var(--border-strong);
+        box-shadow: 0 10px 30px rgba(0,0,0,.4);
+        animation: dockIn .25s var(--ease-pop) both;
+    }
+    @keyframes dockIn { from { opacity: 0; transform: translate(18px, -50%); } to { opacity: 1; transform: translateY(-50%); } }
+    .select-bar .grow { display: none; }
+    .select-bar .sel-count { display: none; }
+    .select-bar .sel-count-mini {
+        display: block; text-align: center; font-size: 11px; font-weight: 700; line-height: 1.4;
+        color: var(--primary); padding: 0 2px 5px; margin-bottom: 1px; border-bottom: 1px solid var(--border);
+    }
+    .select-bar .sel-actions { flex-direction: column; align-items: stretch; gap: 6px; }
+    /* 竖栏里按钮等宽居中；“取消收藏”这类四字动作自然折成两行 */
+    .select-bar .mini-btn {
+        width: 100%; padding: 7px 4px; font-size: 12px; min-height: 30px;
+        justify-content: center; text-align: center; line-height: 1.25;
+    }
+    /* dock 是浮层，不给内容区留白：列表保持全宽，不被挤窄；
+       选择模式下行尾收藏心形正被 dock 压住且此刻无意义（点卡片是切换选中），隐去即可 */
+    body.has-select-bar .content { padding-bottom: 16px; }
+    body.has-select-bar .card .fav-ic { visibility: hidden; }
     .video-layout { grid-template-columns: 1fr; }
     .video-playlist { max-height: 34vh; }
     .video-stage video { max-height: 46vh; }

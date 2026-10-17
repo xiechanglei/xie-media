@@ -30,9 +30,13 @@ assertFfmpegAvailable()
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
 
+// 用户与全局设置文件（xie-auth 写入，本工具只读：scan 归属 / 送人目标）
+const usersFile = path.join(workDir.root, 'users.json')
+
 const media = createMediaHandlers({
     storeDir: workDir.storeDir,
     thumbnailDir: workDir.thumbnailDir,
+    usersFile,
 })
 
 // 链式配置：静态资源、视图模板、上传、路由、守卫
@@ -63,6 +67,12 @@ app.useAuth('/api/collections/merge', 'POST', media.mergeCollections)
 // -------- 批量操作（多选公开/私有/删除/收藏/取消收藏；同样须在 :id 之前）--------
 app.useAuth('/api/collections/batch', 'POST', media.batchCollections)
 
+// -------- 送人（多选转移所有权并强制私有；须在 :id 之前）--------
+app.useAuth('/api/collections/transfer', 'POST', media.transferCollections)
+
+// -------- 可选接收用户（送人时挑选目标，已排除自己）--------
+app.useAuth('/api/users', 'GET', media.listUsers)
+
 // -------- 集合（视频/相册）CRUD --------
 app.useAuth('/api/collections/:id', 'GET', media.getCollection)
 app.useAuth('/api/collections/:id', 'PATCH', media.updateCollection)
@@ -89,7 +99,7 @@ app.serve(port)
 const scanner = createScanner({
     storeDir: workDir.storeDir,
     scanDir: workDir.scanDir,
-    usersFile: path.join(workDir.root, 'users.json'),
+    usersFile,
 })
 scanner.start()
 

@@ -11,6 +11,7 @@ import crypto from 'node:crypto'
 import { get as dbGet, run as dbRun, tx } from './db.js'
 import { probeVideoMeta } from './ffmpeg.js'
 import { classifyFile, stripExt, guessMime, shardOf } from './media.js'
+import { findAdmin } from './user-store.js'
 import { SCAN_INTERVAL_MS, SCAN_MTIME_STABLE_MS } from './config.js'
 
 const nowMs = () => Date.now()
@@ -41,21 +42,6 @@ function moveFile(src, dest) {
         } else {
             throw e
         }
-    }
-}
-
-/** 读取 users.json，取第一个 admin（优先 active）作为归属；无则返回 null */
-function resolveAdmin(usersFile) {
-    try {
-        const data = JSON.parse(fs.readFileSync(usersFile, 'utf8'))
-        const users = Array.isArray(data.users) ? data.users : []
-        const admin =
-            users.find((u) => u.role === 'admin' && u.status === 'active') ||
-            users.find((u) => u.role === 'admin')
-        if (!admin) return null
-        return { id: admin.id, username: admin.username }
-    } catch {
-        return null
     }
 }
 
@@ -182,7 +168,7 @@ export function createScanner(cfg) {
 
     /** 遍历 scan 一级目录，收集并入库；返回本轮汇总 */
     async function scanOnce() {
-        const admin = resolveAdmin(usersFile)
+        const admin = findAdmin(usersFile)
         if (!admin) {
             if (!warnedNoAdmin) {
                 console.log('[scan] 未找到 admin 用户，暂缓自动入库（先注册首个账号）')

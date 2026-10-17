@@ -5,12 +5,14 @@
 // - 详情页承载收藏/可见性/编辑/删除；item 支持批量重命名/删除/排序 + 追加。
 // - 文件按 md5 命名落 store/，同 md5 复用；删除按引用计数清理。
 // - 缩略图首次访问时懒生成，图片直接原图返回。
+// - 多选批量：public/private/delete/fav/unfav + merge 归并 + transfer 送人（改 owner 并强制私有）。
 import * as fs from 'node:fs'
 import * as path from 'node:path'
 import crypto from 'node:crypto'
 import { all as dbAll, get as dbGet, run as dbRun, tx } from './db.js'
 import { VIDEO_EXTENSIONS, IMAGE_EXTENSIONS } from './config.js'
 import { ensureVideoThumbnail, probeVideoMeta } from './ffmpeg.js'
+import { findActiveUser, listActiveUsers } from './user-store.js'
 
 const PLACEHOLDER_SVG = Buffer.from(
     `<svg xmlns="http://www.w3.org/2000/svg" width="640" height="360" viewBox="0 0 640 360">\
@@ -68,10 +70,10 @@ function mapItemRow(it) {
 
 /**
  * 创建业务处理器集合。
- * @param {{ storeDir: string, thumbnailDir: string }} cfg
+ * @param {{ storeDir: string, thumbnailDir: string, usersFile: string }} cfg
  */
 export function createMediaHandlers(cfg) {
-    const { storeDir, thumbnailDir } = cfg
+    const { storeDir, thumbnailDir, usersFile } = cfg
 
     /** 返回 md5 在 store/ 下的绝对路径（不保证存在）：store/<xx>/<md5> */
     const md5ToPath = (md5) => path.join(storeDir, shardOf(md5), md5)
@@ -521,6 +523,50 @@ export function createMediaHandlers(cfg) {
         return { op, done, failed }
     }
 
+    // ===================== 送人（转移所有权）=====================
+
+    /** 可选的接收用户（排除自己，仅 active）：供前端“送人”选择目标 */
+    function listUsers(ctx) {
+        return listActiveUsers(usersFile, ctx.user.id)
+    }
+
+    /**
+     * 请求体：{ ids: [collectionId, ...], to: userId }
+     * 逐个执行不中断，单项失败计入 failed 返回。
+     * 送出即变更 owner_id/owner_name 并将资源强制置为 private（别人的作品不默认公开）；
+     * 同时清除送出者对该资源的收藏记录（已不再属于自己，不应残留在“收藏”里）。
+     * 磁盘文件不动：items 只是换了所属集合。
+     */
+    function transferCollections(ctx) {
+        const user = ctx.user
+        const rawIds = Array.isArray(ctx.body.ids) ? ctx.body.ids.map(x => String(x)) : []
+        const ids = [...new Set(rawIds)]
+        if (!ids.length) throw new Error('请至少选择一个资源')
+        const to = findActiveUser(usersFile, String(ctx.body.to || ''), user.id)
+        if (!to) throw new Error('请选择有效的接收用户')
+
+        let done = 0
+        const failed = []
+        for (const id of ids) {
+            const row = dbGet(`SELECT * FROM collections WHERE id=?`, id)
+            if (!row) { failed.push({ id, reason: '资源不存在' }); continue }
+            try {
+                if (!canMutate(user, row)) throw new Error('无权送出')
+                if (row.owner_id === to.id) throw new Error('该资源已属于此用户')
+                tx(() => {
+                    dbRun(
+                        `UPDATE collections SET owner_id=?, owner_name=?, visibility='private', updated_at=? WHERE id=?`,
+                        to.id, to.username, nowMs(), id)
+                    dbRun(`DELETE FROM favorites WHERE user_id=? AND target_id=?`, user.id, id)
+                })
+                done++
+            } catch (e) {
+                failed.push({ id, title: row.title, reason: e.message })
+            }
+        }
+        return { op: 'transfer', done, failed, to }
+    }
+
     // ===================== 收藏 =====================
 
     function addFavorite(ctx) {
@@ -605,7 +651,7 @@ export function createMediaHandlers(cfg) {
     return {
         listMedia, upload,
         getCollection, updateCollection, updateCollectionVisibility, deleteCollection,
-        patchItems, collectionAddItems, mergeCollections, batchCollections,
+        patchItems, collectionAddItems, mergeCollections, batchCollections, transferCollections, listUsers,
         addFavorite, removeFavorite,
         serveItemFile, serveCollectionThumbnail, serveItemThumbnail,
     }
