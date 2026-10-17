@@ -6,6 +6,7 @@
 // - 文件按 md5 命名落 store/，同 md5 复用；删除按引用计数清理。
 // - 缩略图首次访问时懒生成，图片直接原图返回。
 // - 多选批量：public/private/delete/fav/unfav + merge 归并 + transfer 送人（改 owner 并强制私有）。
+// - 专辑（src/album.js）只引用 collections.id：本模块在“存在性变动”（删除/合并）时同步 album_entries。
 import * as fs from 'node:fs'
 import * as path from 'node:path'
 import crypto from 'node:crypto'
@@ -36,8 +37,8 @@ export function shardOf(md5) {
     return (/^[0-9a-f]{2}/i.test(md5 || '') ? md5.slice(0, 2).toLowerCase() : 'xx')
 }
 
-/** 资源可读性：public 或 owner 或 admin */
-function canRead(user, row) {
+/** 资源可读性：public 或 owner 或 admin（导出供专辑内页复用，两处必须同一口径） */
+export function canRead(user, row) {
     if (!user) return false
     if (user.role === 'admin') return true
     if (row.visibility === 'public') return true
@@ -65,6 +66,59 @@ function mapItemRow(it) {
         mediaType: it.media_type,
         sortOrder: it.sort_order,
         meta,
+    }
+}
+
+/**
+ * 组装一张资源卡片对外的 JSON：项数/类型统计 + 视频元数据聚合 + 当前用户收藏态。
+ * 列表（listMedia）与专辑内页（album.js）共用，避免两处复制统计口径。
+ * @param {object} row collections 行
+ * @param {string} userId 当前用户 id（用于 favorited）
+ */
+export function mapCollectionCard(row, userId) {
+    const cnt = dbGet(`SELECT COUNT(*) AS c FROM items WHERE collection_id=?`, row.id).c
+    const fav = dbGet(`SELECT 1 AS x FROM favorites WHERE user_id=? AND target_id=?`,
+        userId, row.id)
+    // 按媒体类型统计数量
+    const typeRows = dbAll(
+        `SELECT media_type, COUNT(*) AS c FROM items WHERE collection_id=? GROUP BY media_type`, row.id)
+    let videoCount = 0, imageCount = 0
+    for (const t of typeRows) {
+        if (t.media_type === 'video') videoCount = t.c
+        else if (t.media_type === 'image') imageCount = t.c
+    }
+    // 含视频则聚合元数据：总时长 + 最大分辨率（供卡片展示优化）
+    let agg = null
+    if (videoCount > 0) {
+        const metas = dbAll(
+            `SELECT meta_json FROM items WHERE collection_id=? AND media_type='video'`, row.id)
+            .map(x => { try { return x.meta_json ? JSON.parse(x.meta_json) : null } catch { return null } })
+            .filter(Boolean)
+        if (metas.length) {
+            const dur = metas.reduce((s, m) => s + (m.durationSec || 0), 0)
+            const maxH = Math.max(0, ...metas.map(m => m.height || 0))
+            const maxW = Math.max(0, ...metas.map(m => m.width || 0))
+            agg = {
+                durationSec: Math.round(dur),
+                width: maxW || null,
+                height: maxH || null,
+            }
+        }
+    }
+    return {
+        id: row.id,
+        title: row.title,
+        category: row.category,
+        ownerId: row.owner_id,
+        ownerName: row.owner_name,
+        visibility: row.visibility,
+        itemCount: cnt,
+        videoCount,
+        imageCount,
+        createdAt: row.created_at,
+        updatedAt: row.updated_at,
+        favorited: !!fav,
+        agg,
     }
 }
 
@@ -139,52 +193,7 @@ export function createMediaHandlers(cfg) {
         const total = rows.length
         const pageRows = rows.slice((page - 1) * pageSize, page * pageSize)
 
-        const list = pageRows.map(r => {
-            const cnt = dbGet(`SELECT COUNT(*) AS c FROM items WHERE collection_id=?`, r.id).c
-            const fav = dbGet(`SELECT 1 AS x FROM favorites WHERE user_id=? AND target_id=?`,
-                user.id, r.id)
-            // 按媒体类型统计数量
-            const typeRows = dbAll(
-                `SELECT media_type, COUNT(*) AS c FROM items WHERE collection_id=? GROUP BY media_type`, r.id)
-            let videoCount = 0, imageCount = 0
-            for (const t of typeRows) {
-                if (t.media_type === 'video') videoCount = t.c
-                else if (t.media_type === 'image') imageCount = t.c
-            }
-            // 含视频则聚合元数据：总时长 + 最大分辨率（供卡片展示优化）
-            let agg = null
-            if (videoCount > 0) {
-                const metas = dbAll(
-                    `SELECT meta_json FROM items WHERE collection_id=? AND media_type='video'`, r.id)
-                    .map(x => { try { return x.meta_json ? JSON.parse(x.meta_json) : null } catch { return null } })
-                    .filter(Boolean)
-                if (metas.length) {
-                    const dur = metas.reduce((s, m) => s + (m.durationSec || 0), 0)
-                    const maxH = Math.max(0, ...metas.map(m => m.height || 0))
-                    const maxW = Math.max(0, ...metas.map(m => m.width || 0))
-                    agg = {
-                        durationSec: Math.round(dur),
-                        width: maxW || null,
-                        height: maxH || null,
-                    }
-                }
-            }
-            return {
-                id: r.id,
-                title: r.title,
-                category: r.category,
-                ownerId: r.owner_id,
-                ownerName: r.owner_name,
-                visibility: r.visibility,
-                itemCount: cnt,
-                videoCount,
-                imageCount,
-                createdAt: r.created_at,
-                updatedAt: r.updated_at,
-                favorited: !!fav,
-                agg,
-            }
-        })
+        const list = pageRows.map(r => mapCollectionCard(r, user.id))
 
         return { list, total, page, pageSize }
     }
@@ -291,8 +300,10 @@ export function createMediaHandlers(cfg) {
         const items = dbAll(`SELECT md5 FROM items WHERE collection_id=?`, row.id)
         tx(() => {
             dbRun(`DELETE FROM items WHERE collection_id=?`, row.id)
-            dbRun(`DELETE FROM collections WHERE id=?`, row.id)
             dbRun(`DELETE FROM favorites WHERE target_id=?`, row.id)
+            // 存在性变动：资源即将不存在，专辑条目同步移出（专辑本身不受影响）
+            dbRun(`DELETE FROM album_entries WHERE collection_id=?`, row.id)
+            dbRun(`DELETE FROM collections WHERE id=?`, row.id)
         })
         for (const it of items) cleanupMd5IfUnreferenced(it.md5)
         return { deleted: row.id }
@@ -457,6 +468,25 @@ export function createMediaHandlers(cfg) {
                     newId(), f.user_id, newCollectionId, ts)
             }
 
+            // 专辑条目重指向：源集合立即要被删除，不管的话会被 FK 级联删掉，
+            // 导致“合并 3 个资源”把专辑里那 3 条一起抹掉（专辑里就没有条目了）。
+            // 用 INSERT OR IGNORE + DELETE 而不是裸 UPDATE：新集合可能已在该专辑中，
+            // UPDATE 会撞 UNIQUE(album_id, collection_id) 而让整单回滚。
+            const idMarks = ids.map(() => '?').join(',')
+            const touchedAlbums = dbAll(
+                `SELECT DISTINCT album_id FROM album_entries WHERE collection_id IN (${idMarks})`, ...ids)
+            for (const a of touchedAlbums) {
+                const oldest = dbAll(
+                    `SELECT added_at, added_by, added_by_name FROM album_entries
+                     WHERE album_id=? AND collection_id IN (${idMarks}) ORDER BY added_at ASC LIMIT 1`,
+                    a.album_id, ...ids)[0]
+                dbRun(
+                    `INSERT OR IGNORE INTO album_entries (id,album_id,collection_id,added_at,added_by,added_by_name)
+                     VALUES (?,?,?,?,?,?)`,
+                    newId(), a.album_id, newCollectionId, oldest.added_at, oldest.added_by, oldest.added_by_name)
+                dbRun(`DELETE FROM album_entries WHERE album_id=? AND collection_id IN (${idMarks})`, a.album_id, ...ids)
+            }
+
             // 删除源集合及其收藏指向（items 已迁走，不会留下孤立行）
             for (const row of rows) {
                 dbRun(`DELETE FROM favorites WHERE target_id=?`, row.id)
@@ -501,8 +531,9 @@ export function createMediaHandlers(cfg) {
                     const items = dbAll(`SELECT md5 FROM items WHERE collection_id=?`, id)
                     tx(() => {
                         dbRun(`DELETE FROM items WHERE collection_id=?`, id)
-                        dbRun(`DELETE FROM collections WHERE id=?`, id)
                         dbRun(`DELETE FROM favorites WHERE target_id=?`, id)
+                        dbRun(`DELETE FROM album_entries WHERE collection_id=?`, id)
+                        dbRun(`DELETE FROM collections WHERE id=?`, id)
                     })
                     for (const it of items) deletedMd5s.push(it.md5)
                 } else if (op === 'fav') {
@@ -534,8 +565,9 @@ export function createMediaHandlers(cfg) {
      * 请求体：{ ids: [collectionId, ...], to: userId }
      * 逐个执行不中断，单项失败计入 failed 返回。
      * 送出即变更 owner_id/owner_name 并将资源强制置为 private（别人的作品不默认公开）；
-     * 同时清除送出者对该资源的收藏记录（已不再属于自己，不应残留在“收藏”里）。
+     * 同时清除送出者对该资源的收藏记录与专辑条目（已不再属于自己，不应残留在“收藏”/“专辑”里）。
      * 磁盘文件不动：items 只是换了所属集合。
+     * 专辑侧只清 added_by = 送出者 的行，接收方或其他用户把同一资源加进的其它专辑不受影响。
      */
     function transferCollections(ctx) {
         const user = ctx.user
@@ -558,6 +590,8 @@ export function createMediaHandlers(cfg) {
                         `UPDATE collections SET owner_id=?, owner_name=?, visibility='private', updated_at=? WHERE id=?`,
                         to.id, to.username, nowMs(), id)
                     dbRun(`DELETE FROM favorites WHERE user_id=? AND target_id=?`, user.id, id)
+                    // 与清收藏同一语义：送人不可回撤，送出者的专辑条目一并移出（仅清自己加的）
+                    dbRun(`DELETE FROM album_entries WHERE collection_id=? AND added_by=?`, id, user.id)
                 })
                 done++
             } catch (e) {

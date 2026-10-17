@@ -4,7 +4,8 @@
 // - 无限滚动使用 IntersectionObserver
 // - 详情页：根据内容自动判定浏览模式（全视频=播放器+列表；否则=平铺网格），可手动切换
 // - item 支持批量重命名/删除/排序 + 追加；上传显示总进度与逐文件状态
-// - 列表多选：桌面底部横栏放动作，移动端改为靠右浮动竖向 dock；动作含合并/公开/私有/送人/删除/收藏
+// - 列表多选：桌面底部横栏放动作，移动端改为靠右浮动竖向 dock；动作含合并/公开/私有/送人/删除/收藏/加专辑
+// - 专辑：#/list/albums 目录页，#/list/album/<id> 内页；条目只存资源引用，资源改名换封面自动同步
 ;(function () {
     const state = {
         // 列表
@@ -26,6 +27,9 @@
         // 多选合并（仅列表页·我的）
         selectMode: false,
         selected: new Set(),    // Set<String(collectionId)>
+        // 专辑：scope='albums' 为目录页，scope='album' + albumId 为内页
+        albumId: null,
+        albumHead: null,        // 当前专辑头部信息 { title, entryCount, invisibleCount }
     }
 
     const $ = (sel) => document.querySelector(sel)
@@ -172,6 +176,7 @@
         checkCircle: '<path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/>',
         alert: '<circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/>',
         info: '<circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/>',
+        layers: '<polygon points="12 2 2 7 12 12 22 7 12 2"/><polyline points="2 17 12 22 22 17"/><polyline points="2 12 12 17 22 12"/>',
     }
     /** filled：爱心等需要“已选中实心”态的图标 */
     function icon(name, size, filled) {
@@ -275,11 +280,17 @@
         if (!h || h === '/') return { view: 'list', scope: 'mine' }
         let m = h.match(/^\/c\/([0-9a-fA-F-]+)$/)
         if (m) return { view: 'detail', id: m[1] }
-        m = h.match(/^\/list\/(mine|plaza|favorites)?/)
+        // 专辑内页必须先试：后面的 (mine|plaza|favorites|albums)? 对 "album/<id>" 会匹配空串，误当成无 scope
+        m = h.match(/^\/list\/album\/([0-9a-fA-F-]+)/)
+        if (m) return { view: 'list', scope: 'album', albumId: m[1] }
+        m = h.match(/^\/list\/(mine|plaza|favorites|albums)?/)
         if (m) return { view: 'list', scope: m[1] || state.scope || 'mine' }
         return { view: 'list', scope: state.scope }
     }
-    function buildListHash(scope) { return `#/list/${scope || state.scope}` }
+    function buildListHash(scope, albumId) {
+        if (scope === 'album') return `#/list/album/${albumId || state.albumId}`
+        return `#/list/${scope || state.scope}`
+    }
     /** 离开详情页时销毁播放区：仅 hidden 不会暂停 video，移动端会在后台继续出声 */
     function stopDetailPlayback() {
         $$('#detailBody video').forEach(v => { try { v.pause(); v.removeAttribute('src'); v.load() } catch { } })
@@ -298,11 +309,15 @@
             syncSelectUI() // 详情页需隐藏“选择”按钮（state.view 已置为 detail）
             loadDetail(route.id)
         } else {
-            const scopeChanged = route.scope && route.scope !== state.scope
-            if (state.view === 'detail') stopDetailPlayback()
+            // 专辑 A → 专辑 B 是同一 scope 换 albumId，所以两者都要纳入变更判定
+            const scopeChanged = (route.scope && route.scope !== state.scope) ||
+                (route.albumId !== undefined && route.albumId !== state.albumId)
+            if (state.view === 'detail') stopDetailPlayback() // 详情 A → 详情 B 也先销毁旧播放器
             state.view = 'list'
             document.body.classList.remove('detail-mode')
             state.scope = route.scope || state.scope
+            state.albumId = state.scope === 'album' ? (route.albumId || state.albumId) : null
+            if (state.scope !== 'album') state.albumHead = null
             if (scopeChanged && state.selectMode) exitSelectMode(false) // 切范围时清理选择态
             $('#detailView').classList.add('hidden')
             $('#listView').classList.remove('hidden')
@@ -311,10 +326,11 @@
             syncUploadBtnVisible()
             syncSelectUI()
             if (scopeChanged || state.listDirty || state.list.length === 0) { state.listDirty = false; reset() }
+            else renderAlbumHead() // 同专辑返回：不重拉，但横幅要随 scope 切换回到正确显示状态
         }
     }
-    function gotoList(scope) {
-        const target = buildListHash(scope || state.scope)
+    function gotoList(scope, albumId) {
+        const target = buildListHash(scope || state.scope, albumId)
         if (location.hash === target) applyRoute(parseHash()); else location.hash = target
     }
     /** 详情打开方式：桌面端新标签页（列表标签页的数据与滚动位置原封不动保留），
@@ -399,10 +415,15 @@
 
     // ================= 侧栏 / 抽屉 =================
     function syncSidebarActive() {
-        $$('.side-item').forEach(x => x.classList.toggle('active', x.dataset.scope === state.scope))
+        // 专辑内页的 scope 是 'album'，侧栏无此项：高亮到“专辑”入口上
+        const nav = state.scope === 'album' ? 'albums' : state.scope
+        $$('.side-item').forEach(x => x.classList.toggle('active', x.dataset.scope === nav))
     }
     function syncUploadBtnVisible() {
-        $('#uploadBtn').classList.toggle('hidden', state.scope !== 'mine' || state.view !== 'list' || state.selectMode)
+        const inList = state.view === 'list'
+        $('#uploadBtn').classList.toggle('hidden', state.scope !== 'mine' || !inList || state.selectMode)
+        // 新建专辑只在专辑目录页提供；进册后的重命名/删除入口在页内横幅上
+        $('#newAlbumBtn').classList.toggle('hidden', state.scope !== 'albums' || !inList || state.selectMode)
     }
     function closeDrawer() { $('#sidebar').classList.remove('open'); $('#overlay').classList.remove('show') }
     function openDrawer() { $('#sidebar').classList.add('open'); $('#overlay').classList.add('show') }
@@ -449,9 +470,13 @@
         const emptyEl = $('#empty')
         if (state.list.length === 0) {
             emptyEl.classList.remove('hidden')
-            emptyEl.textContent = state.scope === 'mine'
-                ? '还没有内容，点击右上"＋ 上传"开始'
-                : (state.scope === 'favorites' ? '还没有收藏，去广场或我的里挑一个吧' : '广场暂时是空的')
+            emptyEl.textContent = {
+                mine: '还没有内容，点击右上"＋ 上传"开始',
+                favorites: '还没有收藏，去广场或我的里挑一个吧',
+                albums: '还没有专辑，点击右上"＋ 新专辑"创建第一本',
+                album: '这本专辑还是空的，去列表里多选资源点“加专辑”',
+                plaza: '广场暂时是空的',
+            }[state.scope] || '还没有内容'
         } else emptyEl.classList.add('hidden')
     }
     /** 补位拉取：哨兵仍在视口附近且还有更多时继续下一页。
@@ -469,21 +494,41 @@
         $('#empty').classList.add('hidden')
         load()
     }
+    /** 三种列表共用一套无限滚动，仅数据源不同：目录=专辑列表，内页=册内资源，其它=资源列表 */
+    function listUrl(page) {
+        // 目录页后端不分页，拉一次到底；keyword 由后端按专辑名筛
+        if (state.scope === 'albums') {
+            return '/api/albums' + (state.keyword ? '?keyword=' + encodeURIComponent(state.keyword) : '')
+        }
+        const params = new URLSearchParams({ page, pageSize: state.pageSize })
+        if (state.keyword) params.set('keyword', state.keyword)
+        if (state.scope === 'album') return `/api/albums/${state.albumId}/items?` + params
+        params.set('scope', state.scope)
+        return '/api/media?' + params
+    }
     async function load() {
         if (state.loading || !state.hasMore) return
         state.loading = true
         $('#loading').classList.remove('hidden')
         const next = state.page + 1
-        const params = new URLSearchParams({ scope: state.scope, page: next, pageSize: state.pageSize })
-        if (state.keyword) params.set('keyword', state.keyword)
         try {
-            const j = await api('/api/media?' + params)
-            const newList = j.data.list || []
+            const j = await api(listUrl(next))
+            const d = j.data || {}
+            const newList = d.list || []
             state.page = next
-            state.total = j.data.total || 0
+            state.total = d.total || 0
             state.list = state.list.concat(newList)
             state.hasMore = state.list.length < state.total
+            // 专辑内页的标题与条目数每页都刷一次（后端随数据一起返，不额外请求）
+            if (state.scope === 'album') {
+                state.albumHead = {
+                    title: (d.album && d.album.title) || '',
+                    entryCount: d.entryCount || 0,
+                    invisibleCount: d.invisibleCount || 0,
+                }
+            }
             renderAppend(newList)
+            renderAlbumHead()
             $('#endMsg').classList.toggle('hidden', state.hasMore || state.list.length === 0)
             if (state.selectMode) updateSelectBar()
             syncEmptyState()
@@ -500,7 +545,41 @@
             grid.appendChild(card)
         }
     }
+    /** 专辑目录页卡片：封面跟随册内最新的可见资源，一册全不可见时用占位图 */
+    function renderAlbumCard(a) {
+        const card = document.createElement('div'); card.className = 'card album-card'
+        card.dataset.id = a.id
+        const bits = [`<span class="badge private">私密</span>`]
+        const rest = [`${a.entryCount} 个资源`]
+        if (a.invisibleCount) rest.push(`${a.invisibleCount} 个暂不可见`)
+        rest.push(fmtDateTime(a.createdAt))
+        bits.push(`<span class="meta-text">${escapeHtml(rest.join(' · '))}</span>`)
+        card.innerHTML = `
+            <div class="cover-wrap">
+                ${a.firstVisibleCollectionId
+                    ? `<img class="cover" loading="lazy" alt="" src="${coverUrl(a.firstVisibleCollectionId)}">`
+                    : `<div class="cover cover-empty">${icon('layers', 34)}</div>`}
+            </div>
+            <div class="card-body">
+                <div class="card-title" title="${escapeHtml(a.title || '')}"><span class="kind-ic">📚</span> ${escapeHtml(a.title || '')}</div>
+                <div class="card-meta">${bits.join('')}</div>
+            </div>`
+        return card
+    }
+    /** 专辑内页横幅：标题 + 条目统计（含“他人设为私有而暂不可见”的说明，避免以为丢了东西）*/
+    function renderAlbumHead() {
+        const bar = $('#albumBanner'), h = state.albumHead
+        if (state.scope !== 'album' || !h) { bar.classList.add('hidden'); return }
+        bar.classList.remove('hidden')
+        $('#albumTitle').textContent = h.title || '专辑'
+        const bits = [`共 ${h.entryCount} 个资源`]
+        if (h.invisibleCount) bits.push(`${h.invisibleCount} 个因他人设为私有暂不可见`)
+        if (state.keyword) bits.push(`搜索“${state.keyword}”命中 ${state.total} 个`)
+        $('#albumSub').textContent = bits.join(' · ')
+    }
     function renderCard(it) {
+        // 专辑目录页复用同一网格：卡片数据是专辑而不是资源
+        if (state.scope === 'albums') return renderAlbumCard(it)
         // 卡片无操作按钮，点击仅跳转详情（收藏/编辑/删除/可见性都在详情页里）
         const card = document.createElement('div'); card.className = 'card'
         card.dataset.id = it.id
@@ -549,13 +628,14 @@
     /** 同步选择相关按钮/操作栏可见性 */
     function syncSelectUI() {
         const inList = state.view === 'list'
-        $('#selectBtn').classList.toggle('hidden', state.selectMode || !inList)
+        // 专辑目录页卡片是“册子”而非资源，没有批量动作可用，隐藏选择入口
+        $('#selectBtn').classList.toggle('hidden', state.selectMode || !inList || state.scope === 'albums')
         $('#selectBar').classList.toggle('hidden', !state.selectMode)
         document.body.classList.toggle('has-select-bar', state.selectMode)
         syncSelActions()
         updateSelectBar()
     }
-    /** 底部栏动作按视图显隐：我的=合并/公开/私有/送人/删除，广场=收藏，收藏=取消收藏 */
+    /** 底部栏动作按视图显隐：我的=合并/公开/私有/送人/删除，广场=收藏，收藏=取消收藏，专辑内=移出 */
     function syncSelActions() {
         const mine = state.scope === 'mine'
         $('#selMerge').classList.toggle('hidden', !mine)
@@ -565,13 +645,16 @@
         $('#selDelete').classList.toggle('hidden', !mine)
         $('#selFav').classList.toggle('hidden', state.scope !== 'plaza')
         $('#selUnfav').classList.toggle('hidden', state.scope !== 'favorites')
+        // 加专辑：我的/广场/收藏都可加；专辑内页只留“移出”，一栏里不放两套归类语义
+        $('#selAddAlbum').classList.toggle('hidden', !['mine', 'plaza', 'favorites'].includes(state.scope))
+        $('#selRemoveAlbum').classList.toggle('hidden', state.scope !== 'album')
     }
     function updateSelectBar() {
         const n = state.selected.size
         $('#selCount').textContent = `已选 ${n} 项`
         $('#selCountMini').textContent = `${n}`
         $('#selMerge').disabled = n < 2
-        for (const sel of ['#selPublic', '#selPrivate', '#selTransfer', '#selDelete', '#selFav', '#selUnfav']) {
+        for (const sel of ['#selPublic', '#selPrivate', '#selTransfer', '#selDelete', '#selFav', '#selUnfav', '#selAddAlbum', '#selRemoveAlbum']) {
             const b = $(sel); if (b) b.disabled = n === 0
         }
         const allSel = state.list.length > 0 && state.list.every(x => state.selected.has(String(x.id)))
@@ -652,7 +735,9 @@
         $('#grid').addEventListener('click', e => {
             const card = e.target.closest('.card')
             if (!card || card.classList.contains('skeleton')) return
-            if (state.selectMode) toggleSelect(card.dataset.id); else gotoDetail(card.dataset.id)
+            if (state.selectMode) toggleSelect(card.dataset.id)
+            else if (state.scope === 'albums') gotoList('album', card.dataset.id) // 专辑目录页：点卡片进册
+            else gotoDetail(card.dataset.id)
         })
         $('#selectBtn').addEventListener('click', enterSelectMode)
         $('#selCancel').addEventListener('click', () => exitSelectMode())
@@ -666,6 +751,27 @@
         $('#selFav').addEventListener('click', () => batchOp('fav'))
         $('#selUnfav').addEventListener('click', () => batchOp('unfav'))
         $('#selDelete').addEventListener('click', confirmBatchDelete)
+        // 专辑相关：多选栏两个动作 + 弹层提交 + 目录页新建 + 册内重命名/删除
+        $('#selAddAlbum').addEventListener('click', () => openAlbumModal())
+        $('#selRemoveAlbum').addEventListener('click', removeSelectedFromAlbum)
+        $('#albumSubmit').addEventListener('click', doAddToAlbum)
+        $('#albumNewChk').addEventListener('change', e => {
+            $('#albumNewRow').classList.toggle('hidden', !e.target.checked)
+            // “新建”与“选已有”二选一：勾新建就清掉已选专辑，避免提交时歧义
+            if (e.target.checked) { const s = $('#albumPick input:checked'); if (s) s.checked = false }
+            else $('#albumNewName').value = ''
+        })
+        // radio 列表是异步生成的，用容器委托；选了已有专辑就反过去掉新建勾选
+        $('#albumPick').addEventListener('change', () => {
+            if (!$('#albumPick input:checked')) return
+            $('#albumNewChk').checked = false
+            $('#albumNewRow').classList.add('hidden')
+        })
+        $('#newAlbumBtn').addEventListener('click', () => openAlbumForm('create'))
+        $('#albumFormSubmit').addEventListener('click', submitAlbumForm)
+        $('#albumRename').addEventListener('click', () =>
+            openAlbumForm('rename', { id: state.albumId, title: (state.albumHead || {}).title }))
+        $('#albumDelete').addEventListener('click', confirmDeleteAlbum)
     }
 
     // ---- 批量操作： POST /api/collections/batch { ids, op } ----
@@ -693,8 +799,9 @@
     }
     /** 批量操作结果本地化：更新 state.list 数据 + 精准修补对应卡片 */
     function applyBatchResult(op, okIds) {
-        // 从当前列表移除的场景：删除、送人（已不属于自己）；在收藏范围取消收藏（列表只存收藏项，需同步退出）
-        const remove = op === 'delete' || op === 'transfer' || (op === 'unfav' && state.scope === 'favorites')
+        // 从当前列表移除的场景：删除、送人（已不属于自己）、移出专辑；在收藏范围取消收藏同样退出
+        const remove = op === 'delete' || op === 'transfer' || op === 'remove-from-album'
+            || (op === 'unfav' && state.scope === 'favorites')
         for (const id of okIds) {
             const it = state.list.find(x => String(x.id) === String(id))
             const card = $(`#grid .card[data-id="${id}"]`)
@@ -725,12 +832,22 @@
         // 卡片变少后可能不再构成滚动条件，主动补位拉取
         requestAnimationFrame(fillViewport)
     }
-    /** 批量删除前用通用确认弹层兑一道 */
-    function confirmBatchDelete() {
+    /** 批量删除前先查一遍这些资源在哪几个专辑里，把连带移出说清楚再确认 */
+    async function confirmBatchDelete() {
         const ids = selectedIdsInOrder()
         if (!ids.length) return toast('请至少选择一个资源')
         openModal('confirmModal')
-        $('#confirmText').textContent = `确定删除选中的 ${ids.length} 个资源？文件将按引用计数清理，此操作不可恢复。`
+        let note = ''
+        try {
+            const map = (await api('/api/albums/by-collections', {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ collectionIds: ids }),
+            })).data || {}
+            const names = new Set()
+            for (const id of ids) for (const a of (map[id] || [])) names.add(a.title)
+            if (names.size) note = `同时会从 ${names.size} 本专辑中移出：${[...names].join('、')}。`
+        } catch { /* 只是附加提示，查不到不该拦住删除 */ }
+        $('#confirmText').textContent = `确定删除选中的 ${ids.length} 个资源？文件将按引用计数清理，此操作不可恢复。` + note
         $('#confirmOk').onclick = () => batchOp('delete', ids)
     }
 
@@ -784,6 +901,151 @@
         } catch (e) {
             toast('送人失败：' + e.message)
         } finally { btn.disabled = false }
+    }
+
+    // ---- 专辑：加入 / 移出 / 新建 / 重命名 / 删除 ----
+    let albumModalIds = []      // 当前弹层要处理的资源 id（多选或详情页单个）
+    let albumFormMode = 'create', albumFormId = null
+    const jsonPost = (body) => ({
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+    })
+    /**
+     * 打开“加入专辑”弹层。ids 不传取当前多选结果，详情页传单个资源 id。
+     * 一次只选一个目标专辑（radio），“新建专辑并加入”是另一条路径，不在一次提交里混两套动作。
+     */
+    async function openAlbumModal(ids) {
+        ids = ids || selectedIdsInOrder()
+        if (!ids.length) return toast('请至少选择一个资源')
+        albumModalIds = ids
+        // 详情页可能开在新标签页，列表里没有这条数据，用当前详情兼容回显
+        const picked = state.list.filter(x => ids.some(id => String(id) === String(x.id)))
+        const shown = picked.length ? picked
+            : (state.detail ? [{ title: state.detail.title, itemCount: state.detail.items?.length }] : [])
+        $('#albumSummary').innerHTML = `将把以下 <b>${ids.length}</b> 个资源加入专辑：<ul>` +
+            shown.map(x => `<li>${escapeHtml(x.title || '')}${x.itemCount ? ` · ${x.itemCount} 项` : ''}</li>`).join('') + '</ul>'
+        $('#albumNewChk').checked = false
+        $('#albumNewRow').classList.add('hidden')
+        $('#albumNewName').value = ''
+        const box = $('#albumPick')
+        box.innerHTML = '<div class="muted">加载中…</div>'
+        openModal('albumModal')
+        try {
+            const albums = ((await api('/api/albums')).data || {}).list || []
+            box.innerHTML = albums.length
+                ? albums.map(a => `<label class="album-opt">` +
+                    `<input type="radio" name="albumPick" value="${escapeHtml(a.id)}">` +
+                    `<span class="ao-name">${escapeHtml(a.title)}</span>` +
+                    `<span class="ao-count">${a.entryCount} 个资源</span></label>`).join('')
+                : '<div class="muted">还没有专辑，勾选下面“新建专辑并加入”创建一本</div>'
+            // 回显：已全部包含所选资源的专辑标出来，避免重复归类
+            const map = (await api('/api/albums/by-collections', jsonPost({ collectionIds: ids }))).data || {}
+            $$('#albumPick input[type="radio"]').forEach(r => {
+                const full = ids.every(id => (map[id] || []).some(x => x.albumId === r.value))
+                if (full) r.closest('.album-opt').querySelector('.ao-count').textContent = '已全部包含'
+            })
+        } catch (e) {
+            box.innerHTML = `<div class="muted">加载失败：${escapeHtml(e.message)}</div>`
+        }
+    }
+    async function doAddToAlbum() {
+        const ids = albumModalIds
+        if (!ids.length) return toast('请先选择资源')
+        const btn = $('#albumSubmit'); btn.disabled = true
+        try {
+            let albumId = '', albumTitle = ''
+            if ($('#albumNewChk').checked) {
+                albumTitle = $('#albumNewName').value.trim()
+                if (!albumTitle) { toast('请填写新专辑名称'); return }
+                albumId = (await api('/api/albums', jsonPost({ title: albumTitle }))).data.id
+            } else {
+                const sel = $('#albumPick input[name="albumPick"]:checked')
+                if (!sel) { toast('请选择一个专辑，或勾上“新建专辑并加入”'); return }
+                albumId = sel.value
+                albumTitle = sel.closest('.album-opt').querySelector('.ao-name').textContent
+            }
+            const res = (await api(`/api/albums/${albumId}/items`, jsonPost({ collectionIds: ids }))).data || {}
+            closeModal('albumModal')
+            const tail = res.skipped.length ? `，${res.skipped.length} 个已在其中` : ''
+            toast(res.added
+                ? `已把 ${res.added} 个资源加入「${albumTitle}」${tail}`
+                : `所选资源都已在「${albumTitle}」中`)
+            if (state.selectMode) exitSelectMode(false)
+            if (state.scope === 'albums') reset()  // 目录页封面与计数变了
+            notifyList({ type: 'dirty' })          // 其它标签页的专辑计数随之重拉
+        } catch (e) {
+            toast('加入专辑失败：' + e.message)
+        } finally { btn.disabled = false }
+    }
+    /** 移出专辑：只解除引用，资源本体不动，故就地移除卡片并修正计数，不整页重拉 */
+    async function removeSelectedFromAlbum() {
+        const ids = selectedIdsInOrder()
+        if (!ids.length) return toast('请至少选择一个资源')
+        if (!state.albumId) return
+        try {
+            const res = (await api(`/api/albums/${state.albumId}/items`, {
+                method: 'DELETE', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ collectionIds: ids }),
+            })).data || {}
+            applyBatchResult('remove-from-album', ids)
+            exitSelectMode(false)
+            if (state.albumHead) {
+                state.albumHead.entryCount = Math.max(0, state.albumHead.entryCount - (res.removed || 0))
+            }
+            renderAlbumHead()
+            toast(`已从专辑移出 ${res.removed || 0} 个资源，资源本体未受影响`)
+            notifyList({ type: 'dirty' })
+        } catch (e) { toast('移出失败：' + e.message) }
+    }
+    /** 新建与重命名共用一个弹层：rename 时预填当前名称 */
+    function openAlbumForm(mode, album) {
+        albumFormMode = mode
+        albumFormId = album ? album.id : null
+        $('#albumFormTitle').textContent = mode === 'rename' ? '重命名专辑' : '新建专辑'
+        $('#albumFormName').value = mode === 'rename' ? (album.title || '') : ''
+        openModal('albumFormModal')
+        $('#albumFormName').focus()
+    }
+    async function submitAlbumForm() {
+        const name = $('#albumFormName').value.trim()
+        if (!name) return toast('请填写专辑名称')
+        const btn = $('#albumFormSubmit'); btn.disabled = true
+        try {
+            if (albumFormMode === 'rename') {
+                await api(`/api/albums/${albumFormId}`, {
+                    method: 'PUT', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ title: name }),
+                })
+                closeModal('albumFormModal')
+                if (state.albumHead) state.albumHead.title = name
+                renderAlbumHead()
+                toast('已重命名')
+            } else {
+                await api('/api/albums', jsonPost({ title: name }))
+                closeModal('albumFormModal')
+                toast('专辑已创建')
+                gotoList('albums'); reset()
+            }
+            notifyList({ type: 'dirty' })
+        } catch (e) {
+            toast('保存失败：' + e.message)
+        } finally { btn.disabled = false }
+    }
+    /** 删专辑：只删整理册。文案里把“资源不会没”说明白，这是用户最怕的一点 */
+    function confirmDeleteAlbum() {
+        const h = state.albumHead
+        if (!h || !state.albumId) return
+        openModal('confirmModal')
+        $('#confirmText').textContent =
+            `确定删除专辑「${h.title}」？只会删除这本册子，里面的 ${h.entryCount} 个资源不会受影响。`
+        $('#confirmOk').onclick = async () => {
+            try {
+                await api(`/api/albums/${state.albumId}`, { method: 'DELETE' })
+                closeModal('confirmModal')
+                toast('专辑已删除，资源都在')
+                notifyList({ type: 'dirty' })
+                gotoList('albums'); reset()
+            } catch (e) { toast('删除失败：' + e.message) }
+        }
     }
 
     // ================= 无限滚动 =================
@@ -887,6 +1149,8 @@
         }
         if (!state.itemEditorOpen) {
             btns.push(`<button class="mini-btn" data-act="view" type="button" title="切换浏览方式">${icon(state.viewMode === 'list' ? 'grid' : 'list', 13)} ${state.viewMode === 'list' ? '平铺' : '列表'}</button>`)
+            // 加专辑对所有可读者开放：收藏了别人公开资源的人，也能把它归进自己的册子
+            btns.push(`<button class="mini-btn" data-act="album" type="button">${icon('layers', 13)} 加入专辑</button>`)
             if (canMutate) {
                 btns.push(`<button class="mini-btn" data-act="vis" type="button">${d.visibility === 'public' ? `${icon('lock', 13)} 转私有` : `${icon('globe', 13)} 开放到广场`}</button>`)
                 btns.push(`<button class="mini-btn danger" data-act="del" type="button">${icon('trash', 13)} 删除</button>`)
@@ -1027,6 +1291,7 @@
         if (act === 'vis') return toggleVis(d)
         if (act === 'edit-meta') return openEditMeta()
         if (act === 'edit-items') return toggleItemEditor()
+        if (act === 'album') return openAlbumModal([d.id])
         if (act === 'del') return confirmDelete(d)
     }
     /** 详情页操作后标记列表脏（同页路由返回时重拉），并通知其它列表标签页；

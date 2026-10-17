@@ -6,6 +6,10 @@ let _db = null
 // 统一数据模型：collections 表达“一个资源集合”，items 是其文件列表（图片/视频混装，不再区分类型）。
 // - 浏览方式由内容决定：详情页若全部为视频则用“播放器+列表”，否则用“平铺网格”。
 // - favorites 通过 target_id 直接指向 collections.id。
+// - albums/album_entries 是“资源的收藏册”（专辑 → 若干资源），与 v0.2 已废弃的同名表无关：
+//   专辑只引用 collections.id、不持有文件也不复制标题，资源改名/换封面在专辑里自动同步。
+//   条目只随“存在性变动”物理同步（资源被删则级联、被合并则重指向）；
+//   “可见性变动”（转私有/送人）不动数据，由读取侧按 canRead 过滤，重新公开后条目自动回来。
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS collections (
   id            TEXT PRIMARY KEY,
@@ -48,6 +52,33 @@ CREATE TABLE IF NOT EXISTS favorites (
 );
 CREATE INDEX IF NOT EXISTS idx_favorites_user   ON favorites(user_id);
 CREATE INDEX IF NOT EXISTS idx_favorites_target ON favorites(target_id);
+
+-- 专辑（仅创建者可见：visibility 字段恒为 private，为将来开放广场预留、届时无需改表）
+CREATE TABLE IF NOT EXISTS albums (
+  id          TEXT PRIMARY KEY,
+  title       TEXT NOT NULL,
+  owner_id    TEXT NOT NULL,
+  owner_name  TEXT,
+  visibility  TEXT NOT NULL DEFAULT 'private',
+  created_at  INTEGER NOT NULL,
+  updated_at  INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_albums_owner ON albums(owner_id);
+
+-- 专辑条目：只存引用，无 sort_order（固定按 added_at 倒序，新加入的在前）；
+-- added_by 用于“送人时只清送出者自己加的条目”，不误伤接收方或其他用户的专辑
+CREATE TABLE IF NOT EXISTS album_entries (
+  id             TEXT PRIMARY KEY,
+  album_id       TEXT NOT NULL REFERENCES albums(id) ON DELETE CASCADE,
+  collection_id  TEXT NOT NULL REFERENCES collections(id) ON DELETE CASCADE,
+  added_at       INTEGER NOT NULL,
+  added_by       TEXT NOT NULL,
+  added_by_name  TEXT,
+  UNIQUE(album_id, collection_id)
+);
+CREATE INDEX IF NOT EXISTS idx_album_entries_album      ON album_entries(album_id, added_at DESC);
+-- 删资源时 CASCADE 要扫子表，无此索引会退化为全表扫
+CREATE INDEX IF NOT EXISTS idx_album_entries_collection ON album_entries(collection_id);
 `
 
 /**

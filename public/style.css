@@ -596,6 +596,36 @@ body.has-select-bar .content { padding-bottom: 84px; }
 }
 .modal-foot { padding-top: 16px; }
 
+/* ============ 专辑 ============ */
+/* 专辑内页横幅：挂在列表上方，左侧标题与计数，右侧重命名/删除 */
+.album-banner {
+    display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+    margin: 0 0 14px; padding: 12px 16px;
+    background: var(--card); border: 1px solid var(--border); border-radius: var(--radius);
+}
+.album-banner .ab-text { min-width: 0; }
+.album-banner .ab-title { font-size: 16px; font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.album-banner .ab-sub { font-size: 12px; color: var(--muted); margin-top: 3px; }
+/* 整本册子暂时没可见封面时的占位：跟 .cover 同尺寸，中间放图标 */
+.cover.cover-empty {
+    display: flex; align-items: center; justify-content: center;
+    background: var(--cover-ph); color: var(--muted);
+}
+/* “加入专辑”弹层里的单选列表 */
+.album-pick {
+    display: flex; flex-direction: column; gap: 6px;
+    margin: 12px 20px 0; max-height: 210px; overflow-y: auto;
+}
+.album-opt {
+    display: flex; align-items: center; gap: 10px; padding: 9px 12px; cursor: pointer;
+    border: 1px solid var(--border); border-radius: 10px;
+    transition: border-color .18s ease, background .18s ease;
+}
+.album-opt:hover { border-color: var(--border-strong); background: var(--hover); }
+.album-opt input { flex: 0 0 auto; accent-color: var(--primary); }
+.album-opt .ao-name { font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.album-opt .ao-count { margin-left: auto; flex: 0 0 auto; font-size: 12px; color: var(--muted); }
+
 /* ============ 动效偏好 ============ */
 @media (prefers-reduced-motion: reduce) {
     *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; }
@@ -683,6 +713,11 @@ body.has-select-bar .content { padding-bottom: 84px; }
        选择模式下行尾收藏心形正被 dock 压住且此刻无意义（点卡片是切换选中），隐去即可 */
     body.has-select-bar .content { padding-bottom: 16px; }
     body.has-select-bar .card .fav-ic { visibility: hidden; }
+    /* 顶栏窄屏容不下太多文字按钮：新专辑保持不换行，靠搜索框伸缩让位 */
+    #newAlbumBtn { flex: 0 0 auto; padding: 8px 10px; white-space: nowrap; }
+    .album-banner { padding: 10px 12px; margin-bottom: 10px; }
+    .album-banner .ab-title { font-size: 15px; }
+    .album-pick { margin: 12px 14px 0; }
     .video-layout { grid-template-columns: 1fr; }
     .video-playlist { max-height: 34vh; }
     .video-stage video { max-height: 46vh; }

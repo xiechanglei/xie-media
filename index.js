@@ -12,6 +12,7 @@ import { initStoreDir } from "./src/work-dir.js"
 import { initDb } from "./src/db.js"
 import { assertFfmpegAvailable } from "./src/ffmpeg.js"
 import { createMediaHandlers } from "./src/media.js"
+import { createAlbumHandlers } from "./src/album.js"
 import { createScanner } from "./src/scanner.js"
 
 // 解析命令行参数
@@ -38,6 +39,9 @@ const media = createMediaHandlers({
     thumbnailDir: workDir.thumbnailDir,
     usersFile,
 })
+
+// 专辑只读写数据库，不碰磁盘文件，故无需工作目录配置
+const albums = createAlbumHandlers()
 
 // 链式配置：静态资源、视图模板、上传、路由、守卫
 const app = createAuthServer()
@@ -86,6 +90,17 @@ app.useAuth('/api/collections/:id/items', 'POST', media.collectionAddItems)
 // -------- 收藏 --------
 app.useAuth('/api/favorites', 'POST', media.addFavorite)
 app.useAuth('/api/favorites', 'DELETE', media.removeFavorite)
+
+// -------- 专辑（仅创建者可见）--------
+// 与 /api/collections 同一规矩：固定段 by-collections 与三段的 /:id/items 都先于两段的 /:id 注册
+app.useAuth('/api/albums', 'GET', albums.listAlbums)                          // 我的专辑列表
+app.useAuth('/api/albums', 'POST', albums.createAlbum)                        // 新建专辑
+app.useAuth('/api/albums/by-collections', 'POST', albums.albumsOfCollections) // 这些资源在哪些专辑里
+app.useAuth('/api/albums/:id/items', 'GET', albums.listAlbumItems)            // 专辑内资源列表
+app.useAuth('/api/albums/:id/items', 'POST', albums.addAlbumItems)            // 批量加入专辑
+app.useAuth('/api/albums/:id/items', 'DELETE', albums.removeAlbumItems)       // 批量移出专辑
+app.useAuth('/api/albums/:id', 'PUT', albums.renameAlbum)                     // 重命名
+app.useAuth('/api/albums/:id', 'DELETE', albums.deleteAlbum)                  // 删除专辑（仅解除引用，不动资源）
 
 // -------- 文件与缩略图（流式 + Range）--------
 app.useAuth('/media/items/:itemId', 'GET,HEAD', media.serveItemFile)

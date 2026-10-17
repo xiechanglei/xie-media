@@ -44,6 +44,7 @@
             <button class="side-item" data-scope="plaza" type="button"><span class="si-ic"><svg class="ic" width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg></span><span class="si-name">广场</span><svg class="si-go" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg></button>
             <button class="side-item active" data-scope="mine" type="button"><span class="si-ic"><svg class="ic" width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg></span><span class="si-name">我的</span><svg class="si-go" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg></button>
             <button class="side-item" data-scope="favorites" type="button"><span class="si-ic"><svg class="ic" width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.92 8.26 12 2"/></svg></span><span class="si-name">收藏</span><svg class="si-go" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg></button>
+            <button class="side-item" data-scope="albums" type="button"><span class="si-ic"><svg class="ic" width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 2 7 12 12 22 7 12 2"/><polyline points="2 17 12 22 22 17"/><polyline points="2 12 12 17 22 12"/></svg></span><span class="si-name">专辑</span><svg class="si-go" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg></button>
         </nav>
         <div class="sidebar-user">
             <div class="user-card">
@@ -73,12 +74,23 @@
             <input id="searchInput" class="search" type="search" placeholder="搜索标题 / 分类"/>
             <div class="grow"></div>
             <button id="selectBtn" class="ghost hidden" type="button" title="多选合并">选择</button>
+            <button id="newAlbumBtn" class="ghost hidden" type="button" title="新建专辑">＋ 新专辑</button>
             <button id="uploadBtn" class="primary" type="button">＋ 上传</button>
             <button id="backToTop" class="ghost to-top hidden" type="button" title="回到顶部">↑</button>
         </header>
 
         <!-- 列表视图 -->
         <main class="content" id="listView">
+            <!-- 专辑内页横幅：只在 #/list/album/<id> 下亮出，重命名与删专辑入口在此（卡片列表本身不嵌操作按钮）-->
+            <div id="albumBanner" class="album-banner hidden">
+                <div class="ab-text">
+                    <div class="ab-title" id="albumTitle"></div>
+                    <div class="ab-sub" id="albumSub"></div>
+                </div>
+                <div class="grow"></div>
+                <button id="albumRename" class="mini-btn" type="button">重命名</button>
+                <button id="albumDelete" class="mini-btn danger" type="button">删除专辑</button>
+            </div>
             <div id="grid" class="grid"></div>
             <div id="sentinel" class="sentinel"></div>
             <div id="loading" class="loading hidden">加载中…</div>
@@ -186,6 +198,8 @@
         <button id="selDelete" class="mini-btn danger" type="button" disabled>删除</button>
         <button id="selFav" class="mini-btn" type="button" disabled>收藏</button>
         <button id="selUnfav" class="mini-btn" type="button" disabled>取消收藏</button>
+        <button id="selAddAlbum" class="mini-btn" type="button" disabled>加专辑</button>
+        <button id="selRemoveAlbum" class="mini-btn" type="button" disabled>移出专辑</button>
     </span>
     <button id="selCancel" class="mini-btn" type="button">取消</button>
 </div>
@@ -229,6 +243,48 @@
             <div class="grow"></div>
             <button class="ghost" data-close="mergeModal" type="button">取消</button>
             <button id="mergeSubmit" class="primary" type="button">确定合并</button>
+        </div>
+    </div>
+</div>
+
+<!-- 加入专辑弹层：多选或详情页单个资源均可用；单选一个已有专辑，或新建一个 -->
+<div id="albumModal" class="modal hidden" role="dialog">
+    <div class="modal-mask"></div>
+    <div class="modal-body">
+        <div class="modal-head">
+            <h3>加入专辑</h3>
+            <button class="close" data-close="albumModal" type="button">×</button>
+        </div>
+        <div class="merge-summary" id="albumSummary"></div>
+        <div class="album-pick" id="albumPick"><div class="muted">加载中…</div></div>
+        <div class="form-row">
+            <label class="radio"><input id="albumNewChk" type="checkbox"> 新建专辑并加入</label>
+            <label class="hidden" id="albumNewRow">新专辑名称 <input id="albumNewName" type="text" placeholder="例如：2026 想看的片单"/></label>
+        </div>
+        <div class="modal-foot">
+            <div class="grow"></div>
+            <button class="ghost" data-close="albumModal" type="button">取消</button>
+            <button id="albumSubmit" class="primary" type="button">确定</button>
+        </div>
+    </div>
+</div>
+
+<!-- 专辑表单弹层：新建与重命名共用（重命名时预填当前名称）-->
+<div id="albumFormModal" class="modal hidden" role="dialog">
+    <div class="modal-mask"></div>
+    <div class="modal-body narrow">
+        <div class="modal-head">
+            <h3 id="albumFormTitle">新建专辑</h3>
+            <button class="close" data-close="albumFormModal" type="button">×</button>
+        </div>
+        <div class="form-row">
+            <label>名称 <input id="albumFormName" type="text" placeholder="专辑名称"/></label>
+        </div>
+        <div class="merge-warn">专辑只是你个人的整理册，不会出现在广场；里面的资源本体仍属于原主，删除专辑不会影响任何资源。</div>
+        <div class="modal-foot">
+            <div class="grow"></div>
+            <button class="ghost" data-close="albumFormModal" type="button">取消</button>
+            <button id="albumFormSubmit" class="primary" type="button">保存</button>
         </div>
     </div>
 </div>
