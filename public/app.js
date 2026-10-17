@@ -673,6 +673,17 @@
         if (rerender) rerenderGrid()
         syncSelectUI()
     }
+    /**
+     * 清掉卡片上的选中遗留：高亮描边 + 左上角对钩。
+     * exitSelectMode(false) 只清内存不碰 DOM，凡是不重建网格的退路
+     *（批量操作、加入专辑）都必须自己调一次，否则高亮会留在列表上。
+     */
+    function clearSelectionMarks() {
+        $$('#grid .card').forEach(c => {
+            c.classList.remove('selected')
+            const chk = c.querySelector('.select-check'); if (chk) chk.remove()
+        })
+    }
     function toggleSelect(id) {
         const key = String(id)
         const card = $(`#grid .card[data-id="${id}"]`)
@@ -823,10 +834,7 @@
             }
         }
         // 清除选中遗留：高亮描边与左上角对钩，卡片恢复普通浏览态
-        $$('#grid .card').forEach(c => {
-            c.classList.remove('selected')
-            const chk = c.querySelector('.select-check'); if (chk) chk.remove()
-        })
+        clearSelectionMarks()
         $('#endMsg').classList.toggle('hidden', state.hasMore || state.list.length === 0)
         syncEmptyState()
         // 卡片变少后可能不再构成滚动条件，主动补位拉取
@@ -969,7 +977,9 @@
             toast(res.added
                 ? `已把 ${res.added} 个资源加入「${albumTitle}」${tail}`
                 : `所选资源都已在「${albumTitle}」中`)
-            if (state.selectMode) exitSelectMode(false)
+            // 加专辑不改卡片内容也不重建网格，所以选中态必须在这里手动清掉
+            // （exitSelectMode(false) 只清内存，直接用会把高亮描边与对钩留在列表上）
+            if (state.selectMode) { clearSelectionMarks(); exitSelectMode(false) }
             if (state.scope === 'albums') reset()  // 目录页封面与计数变了
             notifyList({ type: 'dirty' })          // 其它标签页的专辑计数随之重拉
         } catch (e) {
