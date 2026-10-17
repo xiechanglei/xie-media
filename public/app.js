@@ -519,20 +519,17 @@
         if (it.itemCount) meta.push(`<span class="count-seg">${it.itemCount} 个文件</span>`)
         // 收藏心形图标（与详情页一致）：固定描述行最右侧，未收藏灰空心/已收藏红实心
         meta.push(`<span class="fav-ic ${it.favorited ? 'on' : ''}">${icon('heart', 13, it.favorited)}</span>`)
-        // 封面悬停浮层：居中播放/图片徽标 + 文件数（仅桌面端封面可见）
-        const hoverBadge = vCount > 0 ? icon('play', 18, true) : icon('image', 18)
         card.innerHTML = `
             <div class="cover-wrap">
                 <img class="cover" loading="lazy" alt="" src="${coverUrl(it.id)}">
                 ${it.agg && it.agg.durationSec ? `<span class="cover-badge dur">${fmtDur(it.agg.durationSec)}</span>` : ''}
-                <div class="cover-hover"><span class="ch-badge">${hoverBadge}</span><span class="ch-text">${it.itemCount || 0} 个文件</span></div>
             </div>
             <div class="card-body">
                 <div class="card-title" title="${escapeHtml(it.title || '')}"><span class="kind-ic">${kindIcon}</span> ${escapeHtml(it.title || '')}${it.category ? ` <span class="title-cat">#${escapeHtml(it.category)}</span>` : ''}</div>
                 <div class="card-meta">${meta.join('')}</div>
             </div>`
         if (state.selectMode) {
-            const chk = document.createElement('span'); chk.className = 'select-check'; chk.innerHTML = icon('check', 14)
+            const chk = document.createElement('span'); chk.className = 'select-check'
             card.appendChild(chk)
             if (state.selected.has(String(it.id))) card.classList.add('selected')
         }
@@ -601,7 +598,7 @@
             if (card) {
                 card.classList.add('selected')
                 if (!card.querySelector('.select-check')) {
-                    const chk = document.createElement('span'); chk.className = 'select-check'; chk.innerHTML = icon('check', 14)
+                    const chk = document.createElement('span'); chk.className = 'select-check'
                     card.appendChild(chk)
                 }
             }

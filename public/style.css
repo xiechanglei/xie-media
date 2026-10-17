@@ -272,21 +272,7 @@ body.detail-mode .topbar { display: none; }
     background: rgba(0,0,0,.72); backdrop-filter: blur(4px); color: #fff; font-size: 12px;
     padding: 3px 9px; border-radius: 6px; pointer-events: none; letter-spacing: .5px;
 }
-/* 悬停浮层：居中图标 + 文件数，随封面一起浮现 */
-.cover-hover {
-    position: absolute; inset: 0; z-index: 1; display: flex; flex-direction: column;
-    align-items: center; justify-content: center; gap: 8px;
-    background: linear-gradient(to top, rgba(6,8,16,.78), rgba(6,8,16,.25) 55%, transparent);
-    opacity: 0; transition: opacity .25s ease; pointer-events: none;
-}
-.card:hover .cover-hover { opacity: 1; }
-.ch-badge {
-    width: 44px; height: 44px; border-radius: 50%; display: flex; align-items: center; justify-content: center;
-    background: var(--grad); color: #fff; box-shadow: 0 4px 18px rgba(124,107,255,.55);
-    transform: scale(.7); transition: transform .25s var(--ease-pop);
-}
-.card:hover .ch-badge { transform: scale(1); }
-.ch-text { font-size: 12px; color: #fff; letter-spacing: 1px; text-shadow: 0 1px 4px rgba(0,0,0,.6); }
+/* 封面悬停仅保留轻微放大（见上方 .card:hover .cover），已移除居中的播放/图片浮层 */
 .card-body { padding: 12px 14px; display: flex; flex-direction: column; gap: 6px; }
 .card-title { font-size: 14px; font-weight: 600; white-space: nowrap; text-overflow: ellipsis; overflow: hidden; }
 .card-title .title-cat { font-size: 12px; font-weight: 400; color: var(--primary); opacity: .85; }
@@ -565,17 +551,17 @@ body.detail-mode .topbar { display: none; }
 .confirm-text { padding: 22px 20px; font-size: 14px; line-height: 1.6; }
 
 /* ============ 多选合并 ============ */
+/* 选中圆点：未选灰、选中绿，不再用对钩图标 */
 .card .select-check {
-    position: absolute; top: 10px; left: 10px; z-index: 3;
-    width: 26px; height: 26px; border-radius: 50%;
-    border: 2px solid rgba(255,255,255,.85); background: rgba(6,8,16,.4); backdrop-filter: blur(4px);
-    display: flex; align-items: center; justify-content: center;
-    color: #fff; pointer-events: none; transition: background .15s, box-shadow .15s, transform .15s;
+    position: absolute; top: 8px; left: 8px; z-index: 3;
+    width: 20px; height: 20px; border-radius: 50%;
+    background: #98a0b3; border: 2px solid rgba(255,255,255,.9);
+    box-shadow: 0 1px 6px rgba(0,0,0,.45); pointer-events: none;
+    transition: background .15s, transform .15s;
 }
-.card.selected { border-color: var(--primary); box-shadow: 0 0 0 2px var(--primary), 0 8px 32px rgba(124,107,255,.35); }
-.card.selected .select-check { background: var(--grad); border-color: transparent; box-shadow: 0 2px 12px rgba(124,107,255,.7); transform: scale(1.08); }
-.card .select-check .ic { opacity: 0; transition: opacity .15s; }
-.card.selected .select-check .ic { opacity: 1; }
+.card.selected .select-check { background: var(--ok); transform: scale(1.06); }
+/* 卡片选中：细描边 + 淡阴影，去掉原来的发光大圈 */
+.card.selected { border-color: var(--primary); box-shadow: 0 0 0 2px var(--primary); }
 .select-bar {
     position: fixed; left: 0; right: 0; bottom: 0; z-index: 60;
     display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
@@ -646,8 +632,8 @@ body.has-select-bar .content { padding-bottom: 84px; }
     .card .card-meta .count-seg, .card .card-meta .meta-text { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .card .card-meta .fav-ic { margin-left: auto; flex: 0 0 auto; }
     .card .kind-ic { display: none; }
-    /* 选中态：左侧渐变指示条 + 淡底，不再依赖边框 */
-    .card.selected { border: none; box-shadow: inset 3px 0 0 var(--primary); background: var(--grad-soft); }
+    /* 选中态：淡底背景 + 左上角圆点变绿即可，不再加发光描边 */
+    .card.selected { border: none; box-shadow: none; background: var(--grad-soft); }
     .card.selected:not(:last-child) { border-bottom: 1px solid var(--border); }
     /* 移动端骨架屏对齐横向列表行 */
     .card.skeleton { flex-direction: row; align-items: center; gap: 12px; padding: 10px 12px; border: none; }
