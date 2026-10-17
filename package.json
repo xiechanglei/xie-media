@@ -1,7 +1,7 @@
 {
   "name": "@xie-work/xie-media",
   "description": "create a media server",
-  "version": "0.4.4",
+  "version": "1.0.1",
   "author": "xiechanglei",
   "license": "MIT",
   "type": "module",
