@@ -1301,19 +1301,29 @@
     // ================= 上传（列表页时可用）=================
     function initUpload() {
         const files = []
+        // 与 files 同下标的上传结果：'' 待上传 | 'done' 成功 | 'fail' 失败。
+        // 批量模式靠它实现“只重试失败项”：已成功的文件再传一遍会重复建资源（后端 /api/upload 无幂等）
+        const results = []
         const drop = $('#dropArea'), input = $('#upFiles'), listEl = $('#fileList')
         const bar = $('#upBar'), fill = $('#upBarFill'), prog = $('#upProgress')
         const sepChk = $('#upSeparate')
         let submitting = false // 上传进行中：锁定拖拽排序，避免索引错位
         // 逐文件状态：每个文件对应一行，行末一个状态 span
+        const statusView = (r) => (r === 'done' ? ['完成', 'done'] : r === 'fail' ? ['失败', 'fail'] : ['待上传', ''])
+        // 重绘时按 results 回显状态，不然 addFiles / 拖拽排序会把已成功的行抹回“待上传”
         function refreshList() {
-            listEl.innerHTML = files.map((f, i) =>
-                `<div class="up-row" data-i="${i}"><span class="up-handle">${icon('grip', 14, true)}</span><span class="up-name">${escapeHtml(f.name)} · ${fmtSize(f.size)}</span>` +
-                `<span class="up-status" data-i="${i}">待上传</span></div>`).join('')
+            listEl.innerHTML = files.map((f, i) => {
+                const [text, cls] = statusView(results[i])
+                return `<div class="up-row" data-i="${i}"><span class="up-handle">${icon('grip', 14, true)}</span><span class="up-name">${escapeHtml(f.name)} · ${fmtSize(f.size)}</span>` +
+                    `<span class="up-status${cls ? ' ' + cls : ''}" data-i="${i}">${text}</span></div>`
+            }).join('')
         }
         function setStatus(i, text, cls) {
             const el = listEl.querySelector(`.up-status[data-i="${i}"]`)
             if (el) { el.textContent = text; el.className = 'up-status' + (cls ? ' ' + cls : '') }
+            // “上传中”不能清空原结果，否则重试时不知道哪些已经传成过
+            if (cls === 'done' || cls === 'fail') results[i] = cls === 'done' ? 'done' : 'fail'
+            if (text === '待上传' && !cls) results[i] = ''
         }
         function setAllStatus(text, cls) {
             files.forEach((_, i) => setStatus(i, text, cls))
@@ -1324,7 +1334,18 @@
             fill.style.width = Math.round(pct * 100) + '%'
             prog.textContent = '上传中 ' + Math.round(pct * 100) + '%'
         }
-        function addFiles(fs) { for (const f of fs) files.push(f); refreshList() }
+        const todoIdxs = () => files.map((_, i) => i).filter(i => results[i] !== 'done')
+        const doneCount = () => results.filter(r => r === 'done').length
+        // 部分成功后按钮直说“只传未成功的”，免得用户以为会全量重传
+        // 统计的是“未成功”而非“失败”：重试前又拖进来的新文件也在本轮范围内
+        function syncSubmitLabel() {
+            const todo = todoIdxs().length, done = doneCount()
+            $('#upSubmit').textContent = sepChk.checked && todo && done ? `重试未成功的 ${todo} 个` : '上传'
+        }
+        function addFiles(fs) {
+            for (const f of fs) { files.push(f); results.push('') }
+            refreshList(); syncSubmitLabel()
+        }
         // 提交前可拖拽调整文件顺序 → items 按此顺序入库（首个文件决定封面）
         attachDragSort({
             container: listEl,
@@ -1332,10 +1353,10 @@
             handleSel: '.up-handle',
             disabled: () => submitting,
             onReorder: rows => {
-                const byIdx = new Map(files.map((f, i) => [i, f]))
-                files.length = 0
-                for (const r of rows) files.push(byIdx.get(Number(r.dataset.i)))
-                refreshList()
+                const byIdx = new Map(files.map((f, i) => [i, { f, r: results[i] || '' }]))
+                files.length = 0; results.length = 0
+                for (const row of rows) { const e = byIdx.get(Number(row.dataset.i)); files.push(e.f); results.push(e.r) }
+                refreshList(); syncSubmitLabel()
             },
         })
         input.addEventListener('change', () => { addFiles(Array.from(input.files || [])); input.value = '' })
@@ -1344,16 +1365,17 @@
         drop.addEventListener('drop', e => { if (e.dataTransfer?.files) addFiles(Array.from(e.dataTransfer.files)) })
 
         $('#uploadBtn').addEventListener('click', () => {
-            files.length = 0; refreshList()
+            files.length = 0; results.length = 0; refreshList()
             $('#upTitle').value = ''; $('#upCategory').value = ''
             sepChk.checked = false; $('#upTitle').disabled = false
-            setProgress(null)
+            setProgress(null); syncSubmitLabel()
             openModal('uploadModal')
         })
         // 批量模式下每个文件各自建资源，共用标题无意义 → 禁用标题输入
         sepChk.addEventListener('change', () => {
             $('#upTitle').disabled = sepChk.checked
             $('#upTitle').placeholder = sepChk.checked ? '批量模式：各资源使用各文件名' : '留空使用首个文件名'
+            syncSubmitLabel()
         })
 
         $('#upSubmit').addEventListener('click', () => {
@@ -1363,14 +1385,14 @@
             else uploadCombined(btn)
         })
 
-        // 常规：全部文件归为一个资源，单次请求 + 总进度条
+        // 常规：全部文件归为一个资源，单次请求 + 总进度条（一个整体，不沿用批量模式的重试记忆）
         function uploadCombined(btn) {
+            files.forEach((_, i) => { results[i] = '' })
             const fd = new FormData()
             if ($('#upTitle').value) fd.append('title', $('#upTitle').value)
             if ($('#upCategory').value) fd.append('category', $('#upCategory').value)
             for (const f of files) fd.append('files', f)
             setAllStatus('上传中', 'doing'); setProgress(0)
-
             const xhr = new XMLHttpRequest()
             xhr.open('POST', '/api/upload', true)
             xhr.withCredentials = true
@@ -1405,29 +1427,41 @@
         }
 
         // 批量模式：逐个文件各发一次 /api/upload，每个文件独立成一个资源；
-        // 每行显示各自真实进度，总进度 = (已完成数 + 当前文件比例) / 总数
+        // 只跑未成功的行（已成功的再传一遍会重复建资源），失败行保留在列表里可反复重试；
+        // 每行显示各自真实进度，总进度 = (本轮已完成 + 当前文件比例) / 本轮待传数
         function uploadSeparate(btn) {
+            const todo = todoIdxs()
+            if (!todo.length) {
+                btn.disabled = false; submitting = false
+                return toast(doneCount() ? '全部文件都已上传成功' : '请先选择文件')
+            }
             const category = $('#upCategory').value
-            const total = files.length
-            let idx = 0, okCount = 0, failCount = 0
+            const total = todo.length
+            const retried = doneCount() > 0 // 上一轮已有成功项：本轮是重试而非首次全量
+            let k = 0, okCount = 0, failCount = 0
+            todo.forEach(i => setStatus(i, '待上传', ''))
             bar.classList.remove('hidden')
             fill.style.width = '0%'
-            prog.textContent = `批量上传 0/${total}`
+            const verb = retried ? '重试上传' : '批量上传'
+            prog.textContent = `${verb} 0/${total}`
 
             const next = () => {
-                if (idx >= total) {
+                if (k >= total) {
                     btn.disabled = false; submitting = false
                     fill.style.width = '100%'
-                    prog.textContent = `完成 ${okCount}/${total}` + (failCount ? `，失败 ${failCount}` : '')
+                    prog.textContent = `本次完成 ${okCount}/${total}` + (failCount ? `，失败 ${failCount}` : '')
                     if (okCount > 0) {
-                        toast(okCount === total ? `已上传 ${total} 个资源` : `成功 ${okCount}/${total}，部分失败`)
+                        toast(okCount === total
+                            ? (retried ? `已重试成功 ${total} 个资源` : `已上传 ${total} 个资源`)
+                            : `本次成功 ${okCount}/${total}，仍有失败`)
                         gotoList('mine'); reset()
                     }
-                    // 全部成功才关弹层；有失败时保留，便于看清哪行标红后重试
-                    if (!failCount) closeModal('uploadModal')
+                    // 整张列表都成功才关弹层；仍有失败就留着，便于看清哪行标红后继续重试
+                    if (!todoIdxs().length) closeModal('uploadModal')
+                    syncSubmitLabel()
                     return
                 }
-                const i = idx
+                const i = todo[k]
                 const f = files[i]
                 const fd = new FormData()
                 if (category) fd.append('category', category)
@@ -1439,8 +1473,8 @@
                     if (!e.lengthComputable) return
                     const p = e.loaded / e.total
                     setStatus(i, p >= 1 ? '服务器处理中…' : Math.round(p * 100) + '%', 'doing')
-                    fill.style.width = Math.round(((idx + Math.min(p, 1)) / total) * 100) + '%'
-                    prog.textContent = p >= 1 ? `批量上传 ${idx}/${total} 已完成，服务器处理中…` : `批量上传 ${idx}/${total} 已完成`
+                    fill.style.width = Math.round(((k + Math.min(p, 1)) / total) * 100) + '%'
+                    prog.textContent = p >= 1 ? `${verb} ${k}/${total} 已完成，服务器处理中…` : `${verb} ${k}/${total} 已完成`
                 }
                 xhr.onload = () => {
                     let j = null
@@ -1448,9 +1482,9 @@
                     const ok = xhr.status >= 200 && xhr.status < 300 && (!j || j.success !== false)
                     if (ok) { okCount++; setStatus(i, '完成', 'done') }
                     else { failCount++; setStatus(i, '失败', 'fail') }
-                    idx++; next()
+                    k++; next()
                 }
-                xhr.onerror = () => { failCount++; setStatus(i, '失败', 'fail'); idx++; next() }
+                xhr.onerror = () => { failCount++; setStatus(i, '失败', 'fail'); k++; next() }
                 xhr.send(fd)
             }
             next()
