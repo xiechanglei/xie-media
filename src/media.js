@@ -12,7 +12,7 @@ import * as path from 'node:path'
 import crypto from 'node:crypto'
 import { all as dbAll, get as dbGet, run as dbRun, tx } from './db.js'
 import { VIDEO_EXTENSIONS, IMAGE_EXTENSIONS } from './config.js'
-import { ensureVideoThumbnail, probeVideoMeta, removeVideoRange } from './ffmpeg.js'
+import { ensureVideoThumbnail, probeVideoMeta, trimVideoKeepRange } from './ffmpeg.js'
 import { findActiveUser, listActiveUsers } from './user-store.js'
 
 const PLACEHOLDER_SVG = Buffer.from(
@@ -554,24 +554,35 @@ export function createMediaHandlers(cfg) {
         return { op, done, failed }
     }
 
-    // ===================== 视频剪切（去掉指定时间段，原地替换旧文件）=====================
+    // ===================== 视频裁剪（一个切点，保留前半或后半，原地替换旧文件）=====================
 
-    /** "HH:MM:SS" / "MM:SS" / 纯秒数 → 秒；非法返回 null */
+    /** "HH:MM:SS" / "MM:SS" / 纯秒数 → 秒；非法返回 null（全角冒号与空格容错） */
     function parseTimeInput(v) {
         if (v === null || v === undefined || v === '') return null
-        if (typeof v === 'number') return Number.isFinite(v) ? v : null
-        const s = String(v).trim()
+        if (typeof v === 'number') return Number.isFinite(v) && v >= 0 ? v : null
+        const s = String(v).replace(/：/g, ':').replace(/\s+/g, '').replace(/^:+|:+$/g, '')
+        if (!s) return null
         if (/^\d+(\.\d+)?$/.test(s)) return parseFloat(s)
         const m = s.match(/^(?:(\d+):)?(\d{1,2}):(\d{1,2}(?:\.\d+)?)$/)
         if (!m) return null
         return (m[1] ? +m[1] * 3600 : 0) + (+m[2]) * 60 + parseFloat(m[3])
     }
 
+    /** 裁剪时间字段：留空返回 null（表示这一端不动），填了但解析不出来直接报错，不再与“没填”共用一句提示 */
+    function parseTimeField(v, label) {
+        if (v === null || v === undefined || String(v).trim() === '') return null
+        const sec = parseTimeInput(v)
+        if (sec == null) throw new Error(`${label}「${String(v).slice(0, 20)}」不是有效时间，请用 HH:MM:SS / MM:SS 或秒数`)
+        return sec
+    }
+
     /**
-     * 剪掉当前视频里的一段时间（去广告用）：重编码后写临时文件，成功后原地替换 store 里的旧文件。
+     * 裁剪当前视频：给一个切点，只保留切点之前或之后那一半，流拷贝后原地替换 store 里的旧文件。
+     * keep='before' 即剪掉片尾，keep='after' 即剪掉片头；不重编码，失败机会集中在容器层，
+     * ffmpeg 封装里已自带“流拷贝不行就重编码”的兑底。
      * 文件名仍按旧 md5，不重算 md5；但需刷新 size/meta_json，并删除旧缩略图让首次访问时懒重生成。
-     * 注意：同 md5 的共享文件会被一并替换（本工具按 md5 去重存储，剪切影响所有引用同一文件的 item）。
-     * 请求体：{ removeStart, removeEnd }，支持秒数或 HH:MM:SS / MM:SS 字符串。
+     * 注意：同 md5 的共享文件会被一并替换（本工具按 md5 去重存储，裁剪影响所有引用同一文件的 item）。
+     * 请求体：{ cutAt, keep }，cutAt 支持秒数或 HH:MM:SS / MM:SS 字符串，keep 为 'before' | 'after'。
      */
     async function trimItemVideo(ctx) {
         const row = getCollectionOrThrow(ctx.params.id)
@@ -579,12 +590,13 @@ export function createMediaHandlers(cfg) {
         const item = dbGet(`SELECT * FROM items WHERE id=? AND collection_id=?`,
             ctx.params.itemId, row.id)
         if (!item) throw new Error(`item 不存在: ${ctx.params.itemId}`)
-        if (item.media_type !== 'video') throw new Error('仅视频支持剪切')
+        if (item.media_type !== 'video') throw new Error('仅视频支持裁剪')
 
-        const removeStart = parseTimeInput(ctx.body.removeStart)
-        const removeEnd = parseTimeInput(ctx.body.removeEnd)
-        if (removeStart == null || removeEnd == null) throw new Error('时间格式应为 HH:MM:SS / MM:SS / 秒数')
-        if (removeStart < 0 || removeEnd <= removeStart) throw new Error('结束时间必须大于起始时间')
+        const body = ctx.body || {}
+        const cutAt = parseTimeField(body.cutAt, '切点')
+        if (cutAt == null) throw new Error('请填写切点时间')
+        const keep = String(body.keep || '')
+        if (keep !== 'before' && keep !== 'after') throw new Error('请选择保留切点之前还是之后')
 
         const filePath = md5ToPath(item.md5)
         if (!fs.existsSync(filePath)) throw new Error('文件不存在')
@@ -593,20 +605,24 @@ export function createMediaHandlers(cfg) {
         const meta = await probeVideoMeta(filePath)
         const durationSec = meta?.durationSec || 0
         if (!durationSec) throw new Error('无法读取视频时长')
-        if (removeStart >= durationSec) throw new Error('起始时间超出视频时长')
-        const removeEndSec = Math.min(removeEnd, durationSec)
+
+        // 切点落在两端附近：等于没剪，常见于拿“已播时长”当成切点填到了一开头
+        const fmtSec = (n) => `${Math.round(n)}s`
+        if (cutAt <= 0.5) throw new Error(`切点 ${fmtSec(cutAt)} 已在片头，几乎没有内容可剪（视频时长 ${fmtSec(durationSec)}）`)
+        if (cutAt >= durationSec - 0.5) throw new Error(`切点 ${fmtSec(cutAt)} 已到片尾，几乎没有内容可剪（视频时长 ${fmtSec(durationSec)}）`)
+        const from = keep === 'after' ? cutAt : null
+        const to = keep === 'before' ? cutAt : null
 
         // 临时文件与目标同分片目录，rename 保证同盘原子替换；后缀沿用原扩展名让 ffmpeg 选对容器
         const ext = (item.ext || 'mp4').toLowerCase()
         const tmpPath = path.join(path.dirname(filePath),
             `${item.md5}.trim-${Date.now()}-${crypto.randomUUID()}.${ext}`)
         try {
-            await removeVideoRange({
+            await trimVideoKeepRange({
                 inputPath: filePath,
                 outputPath: tmpPath,
-                removeStartSec: removeStart,
-                removeEndSec,
-                durationSec,
+                startSec: from,
+                endSec: to,
                 hasAudio: !!meta.audioCodec,
                 ext,
             })

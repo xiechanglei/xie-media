@@ -1,4 +1,4 @@
-// ffmpeg / ffprobe 封装：可用性检测 + 视频缩略图懒生成 + 视频元数据探测 + 视频剪切
+// ffmpeg / ffprobe 封装：可用性检测 + 视频缩略图懒生成 + 视频元数据探测 + 视频裁剪
 import { spawnSync, spawn, execFile } from 'node:child_process'
 import * as fs from 'node:fs'
 import * as path from 'node:path'
@@ -64,58 +64,53 @@ export function probeVideoMeta(filePath) {
 }
 
 /**
- * 视频剪切：去掉 [removeStartSec, removeEndSec] 区间（去广告用），保留前后两段拼接。
- * 任意时间点切断必须重编码；先写到调用方准备好的临时输出路径，成功后由调用方替换原文件。
+ * 视频裁剪：只保留 [startSec, endSec] 这一连续区间，两端都可传 null 表示那一头不动。
+ * 典型用法是一刀两断：留 startSec=null 即只剪片尾，留 endSec=null 即只剪片头。
+ * 保留的是单段连续内容，所以能走 -c copy 流拷贝：不解码不重编码，耗时接近一次 remux。
+ * 代价是 copy 只能在关键帧下刀，ffmpeg 会取所选时间之前最近的关键帧，实际起点可能早 1~2 秒，
+ * 片头偶有几帧花屏；对「剪掉片头广告/片尾彩蛋」这类用途完全够用。
+ * 若 copy 失败（个别容器/编码不支持时间戳重置），自动回退重编码，保证任何输入都能剪。
  * 长任务用异步 spawn：不阻塞事件循环。失败抛 Error（附 stderr 尾部）。
- * @param {{ inputPath:string, outputPath:string, removeStartSec:number, removeEndSec:number, durationSec:number, hasAudio:boolean, ext:string }} opts
+ * @param {{ inputPath:string, outputPath:string, startSec:number|null, endSec:number|null, hasAudio:boolean, ext:string }} opts
  */
-export function removeVideoRange({ inputPath, outputPath, removeStartSec, removeEndSec, durationSec, hasAudio, ext }) {
+export function trimVideoKeepRange({ inputPath, outputPath, startSec, endSec, hasAudio, ext }) {
+    const from = startSec && startSec > 0 ? startSec : null
+    const to = endSec && endSec > 0 ? endSec : null
+    // -ss 放在 -i 之前是输入侧 seek：copy 模式直接跳到关键帧，前面的内容连解码都不做
+    const head = ['-hide_banner', '-loglevel', 'error', '-y']
+    if (from != null) head.push('-ss', from.toFixed(3))
+    head.push('-i', inputPath)
+    // 输入侧 seek 后时间戳已归零，故输出侧用相对时长 -t；保留到片尾时干脆不给结束参数，少写一次尾部索引
+    const range = to != null ? ['-t', Math.max(0.001, (to - (from ?? 0))).toFixed(3)] : []
+    const copyArgs = [...head, ...range,
+        '-c', 'copy', '-avoid_negative_ts', 'make_zero',
+        ...faststartFor(ext), outputPath]
+    const encodeArgs = [...head, ...range, ...encodeArgsFor(ext, hasAudio), '-map_metadata', '0', outputPath]
+    return runFfmpeg(copyArgs, '流拷贝')
+        .catch(copyErr => runFfmpeg(encodeArgs, '重编码')
+            .catch(encodeErr => { throw new Error(`${encodeErr.message}（流拷贝先失败：${copyErr.message}）`) }))
+}
+
+/** mp4/mov 把 moov 前置才能边下边播；流拷贝下这只是重排容器，不触及码率，代价极小 */
+function faststartFor(ext) {
+    const e = (ext || '').toLowerCase()
+    return (e === 'mp4' || e === 'mov') ? ['-movflags', '+faststart'] : []
+}
+
+/** 跑一次 ffmpeg，退出码非 0 或没产出文件即抛错；label 用于区分同一次裁剪里的多条路径 */
+function runFfmpeg(args, label) {
     return new Promise((resolve, reject) => {
-        const fc = buildCutOutFilter({ removeStartSec, removeEndSec, durationSec, hasAudio })
-        if (!fc) { reject(new Error('剪切后剩余时长为 0，请调整时间段')); return }
-        const args = [
-            '-hide_banner', '-loglevel', 'error', '-y', '-i', inputPath,
-            '-filter_complex', fc.filter,
-            '-map', fc.vMap, ...(fc.aMap ? ['-map', fc.aMap] : []),
-            ...encodeArgsFor(ext, hasAudio),
-            '-map_metadata', '0',
-            outputPath,
-        ]
         const proc = spawn('ffmpeg', args)
         let tail = ''
         proc.stderr.on('data', d => { tail = (tail + d).slice(-4000) })
         proc.on('error', reject)
         proc.on('close', (code) => {
-            if (code === 0 && fs.existsSync(outputPath)) return resolve()
-            reject(new Error(`ffmpeg 剪切失败（exit ${code}）：` +
-                tail.split('\n').map(s => s.trim()).filter(Boolean).slice(-3).join(' / ')))
+            const out = args[args.length - 1]
+            if (code === 0 && fs.existsSync(out)) return resolve()
+            const detail = tail.split('\n').map(s => s.trim()).filter(Boolean).slice(-3).join(' / ')
+            reject(new Error(`ffmpeg ${label}失败（exit ${code}）：${detail}`))
         })
     })
-}
-
-/** 前后两段用 trim/atrim 截取后 concat 拼接，返回 filter_complex 与 map 标签；无剩余时长时返回 null */
-function buildCutOutFilter({ removeStartSec, removeEndSec, durationSec, hasAudio }) {
-    const EPS = 0.05
-    const segs = []
-    if (removeStartSec > EPS) segs.push([0, removeStartSec])
-    if (durationSec - removeEndSec > EPS) segs.push([removeEndSec, durationSec])
-    if (!segs.length) return null
-    const parts = []
-    const vLabels = [], aLabels = []
-    segs.forEach(([ss, to], i) => {
-        // 尾段直到片尾时省略 end，避免浮点边界把最后几帧切掉
-        const toTail = durationSec - to <= EPS ? '' : `:end=${to}`
-        parts.push(`[0:v]trim=start=${ss}${toTail},setpts=PTS-STARTPTS[v${i}]`)
-        vLabels.push(`[v${i}]`)
-        if (hasAudio) {
-            parts.push(`[0:a]atrim=start=${ss}${toTail},asetpts=PTS-STARTPTS[a${i}]`)
-            aLabels.push(`[a${i}]`)
-        }
-    })
-    if (segs.length === 1) return { filter: parts.join(';'), vMap: '[v0]', aMap: hasAudio ? '[a0]' : null }
-    const inputs = hasAudio ? vLabels.map((v, i) => `${v}${aLabels[i]}`).join('') : vLabels.join('')
-    parts.push(`${inputs}concat=n=${segs.length}:v=1:a=${hasAudio ? 1 : 0}[outv]${hasAudio ? '[outa]' : ''}`)
-    return { filter: parts.join(';'), vMap: '[outv]', aMap: hasAudio ? '[outa]' : null }
 }
 
 /** 按容器选重编码参数：webm 只收 VP9/Opus；其余（mp4/mov/mkv/未知）统一 H.264/AAC，浏览器兼容优先 */

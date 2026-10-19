@@ -1165,10 +1165,10 @@
             btns.push(`<button class="mini-btn" data-act="album" type="button">${icon('layers', 13)} 加入专辑</button>`)
             if (canMutate) {
                 btns.push(`<button class="mini-btn" data-act="vis" type="button">${d.visibility === 'public' ? `${icon('lock', 13)} 转私有` : `${icon('globe', 13)} 开放到广场`}</button>`)
-                // 列表模式且当前项是视频：可剪掉一个时间段（去广告用），完成后原地替换旧文件
+                // 列表模式且当前项是视频：可掐头去尾（只保留连续一段），完成后原地替换旧文件
                 const cur = d.items[state.detailCurrentIdx]
                 if (state.viewMode === 'list' && cur && cur.mediaType === 'video') {
-                    btns.push(`<button class="mini-btn" data-act="trim" type="button" title="去掉视频中的某个时间段（如片头广告），完成后替换旧文件">${icon('scissors', 13)} 剪切</button>`)
+                    btns.push(`<button class="mini-btn" data-act="trim" type="button" title="裁掉片头或片尾：只保留一段连续内容，不重编码，完成后替换旧文件">${icon('scissors', 13)} 裁剪</button>`)
                 }
                 btns.push(`<button class="mini-btn danger" data-act="del" type="button">${icon('trash', 13)} 删除</button>`)
             }
@@ -1356,16 +1356,16 @@
             if (visBtn) visBtn.innerHTML = next === 'public' ? `${icon('lock', 13)} 转私有` : `${icon('globe', 13)} 开放到广场`
         } catch (e) { toast('操作失败：' + e.message) }
     }
-    // ---- 视频剪切：去掉当前视频的一个时间段（去广告用），成功后原地替换旧文件 ----
+    // ---- 视频裁剪：一个切点一刀两断，选保留前半还是后半；流拷贝不重编码，成功后原地替换旧文件 ----
     const fmtClock = (sec) => {
         sec = Math.max(0, Math.round(sec || 0))
         const h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60), s = sec % 60
         const p = (n) => String(n).padStart(2, '0')
         return h > 0 ? `${p(h)}:${p(m)}:${p(s)}` : `${p(m)}:${p(s)}`
     }
-    /** "HH:MM:SS" / "MM:SS" / 纯秒数 → 秒；空返回 null，非法返回 NaN */
+    /** "HH:MM:SS" / "MM:SS" / 纯秒数 → 秒；空返回 null，非法返回 NaN（全角冒号与空格容错） */
     function parseClock(str) {
-        const s = String(str ?? '').trim()
+        const s = String(str ?? '').replace(/：/g, ':').replace(/\s+/g, '').replace(/^:+|:+$/g, '')
         if (!s) return null
         if (/^\d+(\.\d+)?$/.test(s)) return parseFloat(s)
         const m = s.match(/^(?:(\d+):)?(\d{1,2}):(\d{1,2}(?:\.\d+)?)$/)
@@ -1376,40 +1376,67 @@
         const d = state.detail; if (!d) return
         const it = d.items[state.detailCurrentIdx]
         if (!it || it.mediaType !== 'video') { toast('当前项不是视频'); return }
-        // 弹层会暂存（移出）播放器：先记下当前播放点，方便一键填进剪切区间
-        const v = $('#detailBody video')
-        const cur = v && Number.isFinite(v.currentTime) ? v.currentTime : 0
         openModal('trimModal')
+        // openModal 刚把详情页播放器暂存移出文档（移动端原生视频层会盖住弹层）；
+        // 裁剪需要边播边取切点，故把它接进弹层内继续用，关弹层时 restoreDetailPlayer 会按记录的父节点插回原位
+        const v = stashedPlayer ? stashedPlayer.el : null
+        const box = $('#trimPlayer')
+        box.innerHTML = ''
+        box.classList.toggle('hidden', !v)
+        if (v) box.appendChild(v)
+        const playhead = () => (v && Number.isFinite(v.currentTime)) ? v.currentTime : 0
         const dur = (it.meta && it.meta.durationSec) || 0
-        $('#trimSummary').textContent =
-            `${it.name || ''}${dur ? ` · 时长 ${fmtDur(dur)}` : ''} · 当前播放点 ${fmtClock(cur)}`
-        $('#trimStart').value = fmtClock(cur)
-        $('#trimEnd').value = ''
-        $('#trimUseStart').onclick = () => { $('#trimStart').value = fmtClock(cur) }
-        $('#trimUseEnd').onclick = () => { $('#trimEnd').value = fmtClock(cur) }
+        const atEl = $('#trimAt')
+        $('#trimSummary').textContent = `${it.name || ''}${dur ? ` · 时长 ${fmtDur(dur)}` : ''}`
+        // 只有一个输入框：默认就是当前播放点（先在播放器上播到想剪的位置再开弹层）
+        atEl.value = fmtClock(playhead())
+        // 默认保留后半（剪片头），符合“干掉片头广告”这个主要用途
+        $$('input[name="trimKeep"]').forEach(r => { r.checked = r.value === 'after' })
+        const pickedKeep = () => ($$('input[name="trimKeep"]').find(r => r.checked) || {}).value || null
+        // 把“保留哪一半 / 剪掉多少 / 新时长”算成一句话，用户不必自己脑内换算
+        const renderHint = () => {
+            const t = parseClock(atEl.value)
+            const keep = pickedKeep()
+            const hint = $('#trimHint')
+            if (t == null) { hint.textContent = '请填一个切点时间：1:23:05（时:分:秒）/ 23:05（分:秒）/ 秒数'; return }
+            if (Number.isNaN(t)) { hint.textContent = '时间格式不对：请按 1:23:05（时:分:秒）或 23:05（分:秒）或直接写秒数'; return }
+            if (!keep) { hint.textContent = '请选保留切点之前还是之后'; return }
+            const keepSec = keep === 'before' ? t : (dur ? Math.max(0, dur - t) : null)
+            const bits = [keep === 'before'
+                ? `保留开头 → ${fmtClock(t)}，剪掉后面的片尾`
+                : `保留 ${fmtClock(t)} → 片尾，剪掉前面的片头`]
+            if (keepSec != null) bits.push(`新时长约 ${fmtDur(keepSec)}`)
+            if (dur) bits.push(`剪掉 ${fmtClock(keep === 'before' ? Math.max(0, dur - t) : t)}`)
+            hint.textContent = bits.join(' · ')
+        }
+        $('#trimUsePlayhead').onclick = () => { atEl.value = fmtClock(playhead()); renderHint() }
+        // 用 oninput/onchange 赋值而非 addEventListener：本函数每次打开弹层都会跑，监听器会叠加
+        atEl.oninput = renderHint
+        $$('input[name="trimKeep"]').forEach(r => { r.onchange = renderHint })
+        renderHint()
         $('#trimSubmit').onclick = async () => {
-            const s = parseClock($('#trimStart').value)
-            const e = parseClock($('#trimEnd').value)
-            if (s == null || e == null || Number.isNaN(s) || Number.isNaN(e)) { toast('时间格式不正确，支持 HH:MM:SS / MM:SS / 秒', 4000, 'error'); return }
-            if (e <= s) { toast('结束时间必须大于起始时间', 4000, 'error'); return }
+            const t = parseClock(atEl.value)
+            const keep = pickedKeep()
+            if (t == null) { toast('请填写切点时间', 4000, 'error'); return }
+            if (Number.isNaN(t)) { toast('时间格式不正确，请按 HH:MM:SS / MM:SS 或秒数填写', 5000, 'error'); return }
+            if (!keep) { toast('请选保留切点之前还是之后', 4000, 'error'); return }
             const btn = $('#trimSubmit')
-            btn.disabled = true; btn.textContent = '剪切中…'
+            btn.disabled = true; btn.textContent = '裁剪中…'
             try {
-                // 重编码耗时较长，前端就在弹层上等它；服务端失败会带 ffmpeg 错误尾部
                 const j = await api(`/api/collections/${d.id}/items/${it.id}/trim`, {
                     method: 'POST', headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ removeStart: s, removeEnd: e }),
+                    body: JSON.stringify({ cutAt: t, keep }),
                 })
                 if (j && j.data && Array.isArray(j.data.items)) { d.items = j.data.items; d.itemCount = d.items.length }
                 mediaStamp = Date.now() // 文件已原地替换：媒体 URL 加时间戳绕开浏览器缓存
                 markListDirty()        // 时长/体积变了，列表卡片聚合信息也要重拉
                 closeModal('trimModal')
                 renderDetail()
-                toast('已剪切，旧文件已被替换')
+                toast('已裁剪，旧文件已被替换')
             } catch (err) {
-                toast('剪切失败：' + err.message, 6000, 'error')
+                toast('裁剪失败：' + err.message, 6000, 'error')
             } finally {
-                btn.disabled = false; btn.textContent = '开始剪切'
+                btn.disabled = false; btn.textContent = '开始裁剪'
             }
         }
     }

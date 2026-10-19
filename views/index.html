@@ -289,28 +289,33 @@
     </div>
 </div>
 
-<!-- 视频剪切弹层：指定要去掉的时间段（去广告用），完成后新文件原地替换旧文件（md5 不变）-->
+<!-- 视频裁剪弹层：一个切点一刀两断，选保留前半还是后半；流拷贝后新文件原地替换旧文件（md5 不变）-->
 <div id="trimModal" class="modal hidden" role="dialog">
     <div class="modal-mask"></div>
     <div class="modal-body narrow">
         <div class="modal-head">
-            <h3>视频剪切</h3>
+            <h3>裁剪视频</h3>
             <button class="close" data-close="trimModal" type="button">×</button>
         </div>
         <div class="merge-summary" id="trimSummary"></div>
+        <!-- 详情页播放器在弹层期间被接过来放在这里，可以边播边取切点；关弹层后会自动送回原位 -->
+        <div class="trim-preview hidden" id="trimPlayer"></div>
         <div class="form-row">
-            <label>去掉起始 <input id="trimStart" type="text" placeholder="HH:MM:SS / MM:SS / 秒"/></label>
-            <label>去掉结束 <input id="trimEnd" type="text" placeholder="HH:MM:SS / MM:SS / 秒"/></label>
+            <label>切点 <input id="trimAt" type="text" title="格式：1:23:05（时:分:秒）/ 23:05（分:秒）/ 秒数" placeholder="HH:MM:SS / MM:SS / 秒"/></label>
         </div>
         <div class="form-row">
-            <button class="mini-btn" id="trimUseStart" type="button">起始用播放点</button>
-            <button class="mini-btn" id="trimUseEnd" type="button">结束用播放点</button>
+            <button class="mini-btn" id="trimUsePlayhead" type="button">切点选播放点</button>
         </div>
-        <div class="merge-warn">将删除该时间段内的画面（如广告）并重新编码，耗时视视频长度可能较慢；完成后新文件会替换旧文件，此操作不可撤销。</div>
+        <div class="form-row trim-keep">
+            <label class="radio"><input type="radio" name="trimKeep" value="before"/>保留切点之前（剪掉片尾）</label>
+            <label class="radio"><input type="radio" name="trimKeep" value="after"/>保留切点之后（剪掉片头）</label>
+        </div>
+        <div class="trim-hint" id="trimHint"></div>
+        <div class="merge-warn">不重编码（流拷贝），基本是秒级完成；切点会对齐到最近的关键帧，实际剪口可能比你选的早 1~2 秒。完成后新文件会替换旧文件，此操作不可撤销。</div>
         <div class="modal-foot">
             <div class="grow"></div>
             <button class="ghost" data-close="trimModal" type="button">取消</button>
-            <button id="trimSubmit" class="primary" type="button">开始剪切</button>
+            <button id="trimSubmit" class="primary" type="button">开始裁剪</button>
         </div>
     </div>
 </div>
