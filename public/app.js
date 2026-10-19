@@ -1387,7 +1387,6 @@
         const playhead = () => (v && Number.isFinite(v.currentTime)) ? v.currentTime : 0
         const dur = (it.meta && it.meta.durationSec) || 0
         const atEl = $('#trimAt')
-        $('#trimSummary').textContent = `${it.name || ''}${dur ? ` · 时长 ${fmtDur(dur)}` : ''}`
         // 只有一个输入框：默认就是当前播放点（先在播放器上播到想剪的位置再开弹层）
         atEl.value = fmtClock(playhead())
         // 默认保留后半（剪片头），符合“干掉片头广告”这个主要用途
@@ -1409,7 +1408,16 @@
             if (dur) bits.push(`剪掉 ${fmtClock(keep === 'before' ? Math.max(0, dur - t) : t)}`)
             hint.textContent = bits.join(' · ')
         }
-        $('#trimUsePlayhead').onclick = () => { atEl.value = fmtClock(playhead()); renderHint() }
+        // 切点跟随播放点自动同步：拖动进度条或直接播放，输入框都实时跟着走；
+        // 处理器用赋值式挂在 video 元素上，关弹层后视频送回详情页时处理器仍在，
+        // 故函数内先检查弹层是否开着；用户聚焦输入框手输时不抢写
+        const syncAt = () => {
+            if (!v || $('#trimModal').classList.contains('hidden')) return
+            if (document.activeElement === atEl) return
+            const t = fmtClock(playhead())
+            if (atEl.value !== t) { atEl.value = t; renderHint() }
+        }
+        if (v) { v.ontimeupdate = syncAt; v.onseeked = syncAt }
         // 用 oninput/onchange 赋值而非 addEventListener：本函数每次打开弹层都会跑，监听器会叠加
         atEl.oninput = renderHint
         $$('input[name="trimKeep"]').forEach(r => { r.onchange = renderHint })

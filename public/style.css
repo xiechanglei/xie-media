@@ -594,13 +594,17 @@ body.has-select-bar .content { padding-bottom: 84px; }
     margin: 12px 20px 0; padding: 10px 14px; font-size: 12px; color: var(--danger);
     background: var(--danger-soft); border-radius: 10px; border: 1px solid rgba(255,92,122,.3); line-height: 1.5;
 }
-/* 裁剪弹层：内嵌详情页搬过来的播放器（尺寸压到弹层里，控制条仍用原生 controls）*/
+/* 裁剪弹层：内嵌详情页搬过来的播放器（高度压到 28vh，控制条仍用原生 controls）*/
 .trim-preview { padding: 12px 20px 0; }
-.trim-preview video { width: 100%; max-height: 30vh; display: block; background: #000; border-radius: 10px; outline: none; }
+.trim-preview video { width: 100%; max-height: 28vh; display: block; background: #000; border-radius: 10px; outline: none; }
+/* 切点一行：标题文字与输入框同行排，省去整行高度给播放器 */
+.trim-at { align-items: center; }
+.trim-at label { flex-direction: row; align-items: center; }
+.trim-at input { flex: 1 1 auto; min-width: 0; }
 /* 裁剪结果的实时复述：保留哪一半、剪掉多少、新时长 */
 .trim-hint { padding: 10px 20px 0; font-size: 12px; color: var(--muted); line-height: 1.6; }
-/* 两个保留选项文字较长，横排会挤在一起，改成竖排 */
-.trim-keep { flex-direction: column; align-items: flex-start; gap: 8px; }
+/* 两个保留选项文案已缩写，同行放得下 */
+.trim-keep { gap: 10px; }
 .modal-foot { padding-top: 16px; }
 
 /* ============ 专辑 ============ */
