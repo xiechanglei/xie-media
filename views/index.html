@@ -289,6 +289,32 @@
     </div>
 </div>
 
+<!-- 视频剪切弹层：指定要去掉的时间段（去广告用），完成后新文件原地替换旧文件（md5 不变）-->
+<div id="trimModal" class="modal hidden" role="dialog">
+    <div class="modal-mask"></div>
+    <div class="modal-body narrow">
+        <div class="modal-head">
+            <h3>视频剪切</h3>
+            <button class="close" data-close="trimModal" type="button">×</button>
+        </div>
+        <div class="merge-summary" id="trimSummary"></div>
+        <div class="form-row">
+            <label>去掉起始 <input id="trimStart" type="text" placeholder="HH:MM:SS / MM:SS / 秒"/></label>
+            <label>去掉结束 <input id="trimEnd" type="text" placeholder="HH:MM:SS / MM:SS / 秒"/></label>
+        </div>
+        <div class="form-row">
+            <button class="mini-btn" id="trimUseStart" type="button">起始用播放点</button>
+            <button class="mini-btn" id="trimUseEnd" type="button">结束用播放点</button>
+        </div>
+        <div class="merge-warn">将删除该时间段内的画面（如广告）并重新编码，耗时视视频长度可能较慢；完成后新文件会替换旧文件，此操作不可撤销。</div>
+        <div class="modal-foot">
+            <div class="grow"></div>
+            <button class="ghost" data-close="trimModal" type="button">取消</button>
+            <button id="trimSubmit" class="primary" type="button">开始剪切</button>
+        </div>
+    </div>
+</div>
+
 <script src="/auth/xie-auth.js" data-required></script>
 <script src="/app.js"></script>
 </body>

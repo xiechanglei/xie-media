@@ -12,7 +12,7 @@ import * as path from 'node:path'
 import crypto from 'node:crypto'
 import { all as dbAll, get as dbGet, run as dbRun, tx } from './db.js'
 import { VIDEO_EXTENSIONS, IMAGE_EXTENSIONS } from './config.js'
-import { ensureVideoThumbnail, probeVideoMeta } from './ffmpeg.js'
+import { ensureVideoThumbnail, probeVideoMeta, removeVideoRange } from './ffmpeg.js'
 import { findActiveUser, listActiveUsers } from './user-store.js'
 
 const PLACEHOLDER_SVG = Buffer.from(
@@ -554,6 +554,81 @@ export function createMediaHandlers(cfg) {
         return { op, done, failed }
     }
 
+    // ===================== 视频剪切（去掉指定时间段，原地替换旧文件）=====================
+
+    /** "HH:MM:SS" / "MM:SS" / 纯秒数 → 秒；非法返回 null */
+    function parseTimeInput(v) {
+        if (v === null || v === undefined || v === '') return null
+        if (typeof v === 'number') return Number.isFinite(v) ? v : null
+        const s = String(v).trim()
+        if (/^\d+(\.\d+)?$/.test(s)) return parseFloat(s)
+        const m = s.match(/^(?:(\d+):)?(\d{1,2}):(\d{1,2}(?:\.\d+)?)$/)
+        if (!m) return null
+        return (m[1] ? +m[1] * 3600 : 0) + (+m[2]) * 60 + parseFloat(m[3])
+    }
+
+    /**
+     * 剪掉当前视频里的一段时间（去广告用）：重编码后写临时文件，成功后原地替换 store 里的旧文件。
+     * 文件名仍按旧 md5，不重算 md5；但需刷新 size/meta_json，并删除旧缩略图让首次访问时懒重生成。
+     * 注意：同 md5 的共享文件会被一并替换（本工具按 md5 去重存储，剪切影响所有引用同一文件的 item）。
+     * 请求体：{ removeStart, removeEnd }，支持秒数或 HH:MM:SS / MM:SS 字符串。
+     */
+    async function trimItemVideo(ctx) {
+        const row = getCollectionOrThrow(ctx.params.id)
+        if (!canMutate(ctx.user, row)) throw new Error('无权修改')
+        const item = dbGet(`SELECT * FROM items WHERE id=? AND collection_id=?`,
+            ctx.params.itemId, row.id)
+        if (!item) throw new Error(`item 不存在: ${ctx.params.itemId}`)
+        if (item.media_type !== 'video') throw new Error('仅视频支持剪切')
+
+        const removeStart = parseTimeInput(ctx.body.removeStart)
+        const removeEnd = parseTimeInput(ctx.body.removeEnd)
+        if (removeStart == null || removeEnd == null) throw new Error('时间格式应为 HH:MM:SS / MM:SS / 秒数')
+        if (removeStart < 0 || removeEnd <= removeStart) throw new Error('结束时间必须大于起始时间')
+
+        const filePath = md5ToPath(item.md5)
+        if (!fs.existsSync(filePath)) throw new Error('文件不存在')
+
+        // 时长/音轨信息以磁盘文件实际探测为准（meta_json 可能缺失或过时）
+        const meta = await probeVideoMeta(filePath)
+        const durationSec = meta?.durationSec || 0
+        if (!durationSec) throw new Error('无法读取视频时长')
+        if (removeStart >= durationSec) throw new Error('起始时间超出视频时长')
+        const removeEndSec = Math.min(removeEnd, durationSec)
+
+        // 临时文件与目标同分片目录，rename 保证同盘原子替换；后缀沿用原扩展名让 ffmpeg 选对容器
+        const ext = (item.ext || 'mp4').toLowerCase()
+        const tmpPath = path.join(path.dirname(filePath),
+            `${item.md5}.trim-${Date.now()}-${crypto.randomUUID()}.${ext}`)
+        try {
+            await removeVideoRange({
+                inputPath: filePath,
+                outputPath: tmpPath,
+                removeStartSec: removeStart,
+                removeEndSec,
+                durationSec,
+                hasAudio: !!meta.audioCodec,
+                ext,
+            })
+            fs.renameSync(tmpPath, filePath)
+        } catch (e) {
+            try { if (fs.existsSync(tmpPath)) fs.unlinkSync(tmpPath) } catch {}
+            throw e
+        }
+
+        // 旧缩略图基于旧内容（若剪掉片头会停在广告帧）：删除后由首次访问懒生成
+        try { const t = thumbToPath(item.md5); if (fs.existsSync(t)) fs.unlinkSync(t) } catch {}
+
+        // 时长/体积已变化：重新探测 meta 并更新；md5 与存储路径不变
+        const newMeta = await probeVideoMeta(filePath)
+        const newSize = fs.statSync(filePath).size
+        dbRun(`UPDATE items SET size=?, meta_json=? WHERE id=?`,
+            newSize, newMeta ? JSON.stringify(newMeta) : null, item.id)
+        dbRun(`UPDATE collections SET updated_at=? WHERE id=?`, nowMs(), row.id)
+
+        return { id: row.id, items: listItemsOf(row.id) }
+    }
+
     // ===================== 送人（转移所有权）=====================
 
     /** 可选的接收用户（排除自己，仅 active）：供前端“送人”选择目标 */
@@ -686,6 +761,7 @@ export function createMediaHandlers(cfg) {
         listMedia, upload,
         getCollection, updateCollection, updateCollectionVisibility, deleteCollection,
         patchItems, collectionAddItems, mergeCollections, batchCollections, transferCollections, listUsers,
+        trimItemVideo,
         addFavorite, removeFavorite,
         serveItemFile, serveCollectionThumbnail, serveItemThumbnail,
     }

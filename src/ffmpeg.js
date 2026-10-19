@@ -1,5 +1,5 @@
-// ffmpeg / ffprobe 封装：可用性检测 + 视频缩略图懒生成 + 视频元数据探测
-import { spawnSync, execFile } from 'node:child_process'
+// ffmpeg / ffprobe 封装：可用性检测 + 视频缩略图懒生成 + 视频元数据探测 + 视频剪切
+import { spawnSync, spawn, execFile } from 'node:child_process'
 import * as fs from 'node:fs'
 import * as path from 'node:path'
 
@@ -61,6 +61,73 @@ export function probeVideoMeta(filePath) {
             resolve(parseProbeOutput(stdout))
         })
     })
+}
+
+/**
+ * 视频剪切：去掉 [removeStartSec, removeEndSec] 区间（去广告用），保留前后两段拼接。
+ * 任意时间点切断必须重编码；先写到调用方准备好的临时输出路径，成功后由调用方替换原文件。
+ * 长任务用异步 spawn：不阻塞事件循环。失败抛 Error（附 stderr 尾部）。
+ * @param {{ inputPath:string, outputPath:string, removeStartSec:number, removeEndSec:number, durationSec:number, hasAudio:boolean, ext:string }} opts
+ */
+export function removeVideoRange({ inputPath, outputPath, removeStartSec, removeEndSec, durationSec, hasAudio, ext }) {
+    return new Promise((resolve, reject) => {
+        const fc = buildCutOutFilter({ removeStartSec, removeEndSec, durationSec, hasAudio })
+        if (!fc) { reject(new Error('剪切后剩余时长为 0，请调整时间段')); return }
+        const args = [
+            '-hide_banner', '-loglevel', 'error', '-y', '-i', inputPath,
+            '-filter_complex', fc.filter,
+            '-map', fc.vMap, ...(fc.aMap ? ['-map', fc.aMap] : []),
+            ...encodeArgsFor(ext, hasAudio),
+            '-map_metadata', '0',
+            outputPath,
+        ]
+        const proc = spawn('ffmpeg', args)
+        let tail = ''
+        proc.stderr.on('data', d => { tail = (tail + d).slice(-4000) })
+        proc.on('error', reject)
+        proc.on('close', (code) => {
+            if (code === 0 && fs.existsSync(outputPath)) return resolve()
+            reject(new Error(`ffmpeg 剪切失败（exit ${code}）：` +
+                tail.split('\n').map(s => s.trim()).filter(Boolean).slice(-3).join(' / ')))
+        })
+    })
+}
+
+/** 前后两段用 trim/atrim 截取后 concat 拼接，返回 filter_complex 与 map 标签；无剩余时长时返回 null */
+function buildCutOutFilter({ removeStartSec, removeEndSec, durationSec, hasAudio }) {
+    const EPS = 0.05
+    const segs = []
+    if (removeStartSec > EPS) segs.push([0, removeStartSec])
+    if (durationSec - removeEndSec > EPS) segs.push([removeEndSec, durationSec])
+    if (!segs.length) return null
+    const parts = []
+    const vLabels = [], aLabels = []
+    segs.forEach(([ss, to], i) => {
+        // 尾段直到片尾时省略 end，避免浮点边界把最后几帧切掉
+        const toTail = durationSec - to <= EPS ? '' : `:end=${to}`
+        parts.push(`[0:v]trim=start=${ss}${toTail},setpts=PTS-STARTPTS[v${i}]`)
+        vLabels.push(`[v${i}]`)
+        if (hasAudio) {
+            parts.push(`[0:a]atrim=start=${ss}${toTail},asetpts=PTS-STARTPTS[a${i}]`)
+            aLabels.push(`[a${i}]`)
+        }
+    })
+    if (segs.length === 1) return { filter: parts.join(';'), vMap: '[v0]', aMap: hasAudio ? '[a0]' : null }
+    const inputs = hasAudio ? vLabels.map((v, i) => `${v}${aLabels[i]}`).join('') : vLabels.join('')
+    parts.push(`${inputs}concat=n=${segs.length}:v=1:a=${hasAudio ? 1 : 0}[outv]${hasAudio ? '[outa]' : ''}`)
+    return { filter: parts.join(';'), vMap: '[outv]', aMap: hasAudio ? '[outa]' : null }
+}
+
+/** 按容器选重编码参数：webm 只收 VP9/Opus；其余（mp4/mov/mkv/未知）统一 H.264/AAC，浏览器兼容优先 */
+function encodeArgsFor(ext, hasAudio) {
+    const e = (ext || '').toLowerCase()
+    if (e === 'webm') {
+        return ['-c:v', 'libvpx-vp9', '-crf', '32', '-b:v', '0', '-cpu-used', '4',
+            ...(hasAudio ? ['-c:a', 'libopus', '-b:a', '128k'] : [])]
+    }
+    return ['-c:v', 'libx264', '-preset', 'veryfast', '-crf', '20', '-pix_fmt', 'yuv420p',
+        ...(hasAudio ? ['-c:a', 'aac', '-b:a', '160k'] : []),
+        ...((e === 'mp4' || e === 'mov') ? ['-movflags', '+faststart'] : [])]
 }
 
 /**

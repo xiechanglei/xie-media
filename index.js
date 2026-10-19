@@ -83,9 +83,11 @@ app.useAuth('/api/collections/:id', 'PATCH', media.updateCollection)
 app.useAuth('/api/collections/:id/visibility', 'PATCH', media.updateCollectionVisibility)
 app.useAuth('/api/collections/:id', 'DELETE', media.deleteCollection)
 
-// -------- items 维护（重命名 / 删除 / 排序 / 追加）--------
+// -------- items 维护（重命名 / 删除 / 排序 / 追加 / 视频剪切）--------
 app.useAuth('/api/collections/:id/items', 'PATCH', media.patchItems)
 app.useAuth('/api/collections/:id/items', 'POST', media.collectionAddItems)
+// 视频剪切：去掉指定时间段（去广告）并重编码，成功后原地替换旧文件（md5 不变）
+app.useAuth('/api/collections/:id/items/:itemId/trim', 'POST', media.trimItemVideo)
 
 // -------- 收藏 --------
 app.useAuth('/api/favorites', 'POST', media.addFavorite)

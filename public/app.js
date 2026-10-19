@@ -106,9 +106,10 @@
             $('#lbStage').innerHTML = ''
         }
     }
-    const itemUrl = (id) => `/media/items/${id}`
-    const itemThumbUrl = (id) => `/media/thumbnails/items/${id}`
-    const coverUrl = (colId) => `/media/thumbnails/collections/${colId}`
+    let mediaStamp = 0 // 视频剪切原地替换文件后置时间戳：媒体 URL 拼参数强制绕开浏览器缓存
+    const itemUrl = (id) => `/media/items/${id}${mediaStamp ? `?t=${mediaStamp}` : ''}`
+    const itemThumbUrl = (id) => `/media/thumbnails/items/${id}${mediaStamp ? `?t=${mediaStamp}` : ''}`
+    const coverUrl = (colId) => `/media/thumbnails/collections/${colId}${mediaStamp ? `?t=${mediaStamp}` : ''}`
 
     // ---- 元数据展示小工具 ----
     function fmtDur(sec) {
@@ -172,6 +173,7 @@
         undo: '<polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/>',
         grip: '<circle cx="9" cy="6" r="1.5"/><circle cx="9" cy="12" r="1.5"/><circle cx="9" cy="18" r="1.5"/><circle cx="15" cy="6" r="1.5"/><circle cx="15" cy="12" r="1.5"/><circle cx="15" cy="18" r="1.5"/>',
         play: '<polygon points="5 3 19 12 5 21 5 3"/>',
+        scissors: '<circle cx="6" cy="6" r="3"/><path d="M8.12 8.12 12 12"/><path d="M20 4 8.12 15.88"/><circle cx="6" cy="18" r="3"/><path d="M14.8 14.8 20 20"/>',
         image: '<rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/>',
         checkCircle: '<path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/>',
         alert: '<circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/>',
@@ -1163,6 +1165,11 @@
             btns.push(`<button class="mini-btn" data-act="album" type="button">${icon('layers', 13)} 加入专辑</button>`)
             if (canMutate) {
                 btns.push(`<button class="mini-btn" data-act="vis" type="button">${d.visibility === 'public' ? `${icon('lock', 13)} 转私有` : `${icon('globe', 13)} 开放到广场`}</button>`)
+                // 列表模式且当前项是视频：可剪掉一个时间段（去广告用），完成后原地替换旧文件
+                const cur = d.items[state.detailCurrentIdx]
+                if (state.viewMode === 'list' && cur && cur.mediaType === 'video') {
+                    btns.push(`<button class="mini-btn" data-act="trim" type="button" title="去掉视频中的某个时间段（如片头广告），完成后替换旧文件">${icon('scissors', 13)} 剪切</button>`)
+                }
                 btns.push(`<button class="mini-btn danger" data-act="del" type="button">${icon('trash', 13)} 删除</button>`)
             }
         }
@@ -1302,6 +1309,7 @@
         if (act === 'edit-meta') return openEditMeta()
         if (act === 'edit-items') return toggleItemEditor()
         if (act === 'album') return openAlbumModal([d.id])
+        if (act === 'trim') return openTrimModal()
         if (act === 'del') return confirmDelete(d)
     }
     /** 详情页操作后标记列表脏（同页路由返回时重拉），并通知其它列表标签页；
@@ -1347,6 +1355,63 @@
             const visBtn = $('#detailBody .body-toolbar button[data-act="vis"]')
             if (visBtn) visBtn.innerHTML = next === 'public' ? `${icon('lock', 13)} 转私有` : `${icon('globe', 13)} 开放到广场`
         } catch (e) { toast('操作失败：' + e.message) }
+    }
+    // ---- 视频剪切：去掉当前视频的一个时间段（去广告用），成功后原地替换旧文件 ----
+    const fmtClock = (sec) => {
+        sec = Math.max(0, Math.round(sec || 0))
+        const h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60), s = sec % 60
+        const p = (n) => String(n).padStart(2, '0')
+        return h > 0 ? `${p(h)}:${p(m)}:${p(s)}` : `${p(m)}:${p(s)}`
+    }
+    /** "HH:MM:SS" / "MM:SS" / 纯秒数 → 秒；空返回 null，非法返回 NaN */
+    function parseClock(str) {
+        const s = String(str ?? '').trim()
+        if (!s) return null
+        if (/^\d+(\.\d+)?$/.test(s)) return parseFloat(s)
+        const m = s.match(/^(?:(\d+):)?(\d{1,2}):(\d{1,2}(?:\.\d+)?)$/)
+        if (!m) return NaN
+        return (m[1] ? +m[1] * 3600 : 0) + (+m[2]) * 60 + parseFloat(m[3])
+    }
+    function openTrimModal() {
+        const d = state.detail; if (!d) return
+        const it = d.items[state.detailCurrentIdx]
+        if (!it || it.mediaType !== 'video') { toast('当前项不是视频'); return }
+        // 弹层会暂存（移出）播放器：先记下当前播放点，方便一键填进剪切区间
+        const v = $('#detailBody video')
+        const cur = v && Number.isFinite(v.currentTime) ? v.currentTime : 0
+        openModal('trimModal')
+        const dur = (it.meta && it.meta.durationSec) || 0
+        $('#trimSummary').textContent =
+            `${it.name || ''}${dur ? ` · 时长 ${fmtDur(dur)}` : ''} · 当前播放点 ${fmtClock(cur)}`
+        $('#trimStart').value = fmtClock(cur)
+        $('#trimEnd').value = ''
+        $('#trimUseStart').onclick = () => { $('#trimStart').value = fmtClock(cur) }
+        $('#trimUseEnd').onclick = () => { $('#trimEnd').value = fmtClock(cur) }
+        $('#trimSubmit').onclick = async () => {
+            const s = parseClock($('#trimStart').value)
+            const e = parseClock($('#trimEnd').value)
+            if (s == null || e == null || Number.isNaN(s) || Number.isNaN(e)) { toast('时间格式不正确，支持 HH:MM:SS / MM:SS / 秒', 4000, 'error'); return }
+            if (e <= s) { toast('结束时间必须大于起始时间', 4000, 'error'); return }
+            const btn = $('#trimSubmit')
+            btn.disabled = true; btn.textContent = '剪切中…'
+            try {
+                // 重编码耗时较长，前端就在弹层上等它；服务端失败会带 ffmpeg 错误尾部
+                const j = await api(`/api/collections/${d.id}/items/${it.id}/trim`, {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ removeStart: s, removeEnd: e }),
+                })
+                if (j && j.data && Array.isArray(j.data.items)) { d.items = j.data.items; d.itemCount = d.items.length }
+                mediaStamp = Date.now() // 文件已原地替换：媒体 URL 加时间戳绕开浏览器缓存
+                markListDirty()        // 时长/体积变了，列表卡片聚合信息也要重拉
+                closeModal('trimModal')
+                renderDetail()
+                toast('已剪切，旧文件已被替换')
+            } catch (err) {
+                toast('剪切失败：' + err.message, 6000, 'error')
+            } finally {
+                btn.disabled = false; btn.textContent = '开始剪切'
+            }
+        }
     }
     function openEditMeta() {
         const d = state.detail
