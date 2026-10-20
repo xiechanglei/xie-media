@@ -8,6 +8,10 @@ import * as path from 'node:path'
 import {
     ARIA2_RPC_PORT,
     ARIA2_MAX_CONCURRENT_DOWNLOADS,
+    ARIA2_SPLIT,
+    ARIA2_MAX_CONNECTION_PER_SERVER,
+    ARIA2_BT_MAX_PEERS,
+    ARIA2_BT_REQUEST_PEER_SPEED_LIMIT,
     ARIA2_SESSION_FILE,
     ARIA2_RPC_READY_TIMEOUT_MS,
 } from './config.js'
@@ -44,7 +48,8 @@ export function detectAria2() {
 
 /**
  * 创建 aria2 控制器。
- * @param {{ downloadDir: string, port?: number, maxConcurrentDownloads?: number }} cfg
+ * @param {{ downloadDir: string, port?: number, maxConcurrentDownloads?: number,
+ *            split?: number, maxConnectionPerServer?: number }} cfg
  * @returns {{
  *   start: () => Promise<{ ok: boolean, reason?: string, version?: string, reused?: boolean }>,
  *   stop: () => void,
@@ -57,6 +62,8 @@ export function createAria2(cfg) {
     const downloadDir = cfg.downloadDir
     const port = cfg.port || ARIA2_RPC_PORT
     const maxConcurrentDownloads = cfg.maxConcurrentDownloads || ARIA2_MAX_CONCURRENT_DOWNLOADS
+    const split = cfg.split || ARIA2_SPLIT
+    const maxConnectionPerServer = cfg.maxConnectionPerServer || ARIA2_MAX_CONNECTION_PER_SERVER
     const rpcUrl = `http://127.0.0.1:${port}/jsonrpc`
     const sessionFile = path.join(downloadDir, ARIA2_SESSION_FILE)
 
@@ -110,6 +117,11 @@ export function createAria2(cfg) {
             '--file-allocation=none',
             '--seed-time=0',
             `--max-concurrent-downloads=${maxConcurrentDownloads}`,
+            // 提速：多连接分段下载（默认对同一服务器仅 1 连接）+ BT 不限 peer、慢速时主动找新 peer
+            `--split=${split}`,
+            `--max-connection-per-server=${maxConnectionPerServer}`,
+            `--bt-max-peers=${ARIA2_BT_MAX_PEERS}`,
+            `--bt-request-peer-speed-limit=${ARIA2_BT_REQUEST_PEER_SPEED_LIMIT}`,
             '--summary-interval=0',
             '--console-log-level=warn',
         ]

@@ -19,9 +19,16 @@ import { all as dbAll, get as dbGet, run as dbRun, tx } from './db.js'
 import { classifyFile, guessMime, shardOf } from './media.js'
 import { probeVideoMeta } from './ffmpeg.js'
 import { fileMd5Streaming, moveFile, walkFiles } from './files.js'
+import { ARIA2_BT_MAX_PEERS, ARIA2_BT_REQUEST_PEER_SPEED_LIMIT } from './config.js'
 
 const nowMs = () => Date.now()
 const newId = () => crypto.randomUUID()
+
+// BT 提速参数按任务下发：复用外部 daemon 时启动参数不归我们管，只有任务级 options 能兑底
+const BT_SPEED_OPTIONS = {
+    'bt-max-peers': String(ARIA2_BT_MAX_PEERS),
+    'bt-request-peer-speed-limit': ARIA2_BT_REQUEST_PEER_SPEED_LIMIT,
+}
 
 // aria2 任务状态 → 本表状态（removed 视为 error，进度字段保留最后快照）
 function mapAria2Status(s) {
@@ -208,7 +215,7 @@ export function createOfflineHandlers({ aria2, downloadDir, storeDir }) {
                 spec = selectSpecFor(parsed.files.length, sel)
                 // 备份原始种子（隐藏文件，任何清单/入库都不会收录）：供"重新选择"与重启重放时重新 addTorrent
                 fs.writeFileSync(path.join(dir, '.source.torrent'), buf)
-                const options = { dir, pause: 'true' }
+                const options = { dir, pause: 'true', ...BT_SPEED_OPTIONS }
                 if (spec) options['select-file'] = spec
                 gid = await aria2.rpcCall('aria2.addTorrent', [b64, [], options])
                 if (!deferStart) await aria2.rpcCall('aria2.unpause', [gid])
@@ -223,7 +230,7 @@ export function createOfflineHandlers({ aria2, downloadDir, storeDir }) {
                 }
                 // 实测：pause=true 的磁力不会解析元数据（清单永远只有一项），必须 pause-metadata：
                 // 允许网络交换元数据，拿到后自动暂停在内容下载之前
-                gid = await aria2.rpcCall('aria2.addUri', [[magnet], { dir, 'pause-metadata': 'true' }])
+                gid = await aria2.rpcCall('aria2.addUri', [[magnet], { dir, 'pause-metadata': 'true', ...BT_SPEED_OPTIONS }])
                 const dn = magnet.match(/[?&]dn=([^&]+)/)
                 if (dn) { try { displayName = decodeURIComponent(dn[1].replace(/\+/g, ' ')) } catch { /* ignore */ } }
             }
@@ -307,7 +314,7 @@ export function createOfflineHandlers({ aria2, downloadDir, storeDir }) {
      * @param {object} r 任务行；{ spec 索引串|null, paused 是否以挂起态加入 }
      */
     async function reAdd(r, { spec = null, paused = false } = {}) {
-        const options = { dir: r.dir }
+        const options = { dir: r.dir, ...BT_SPEED_OPTIONS }
         if (paused) {
             if (r.type === 'magnet') options['pause-metadata'] = 'true' // 重加的磁力同样先停在元数据阶段
             else options['pause'] = 'true'

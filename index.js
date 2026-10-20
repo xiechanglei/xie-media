@@ -25,7 +25,7 @@ process.removeAllListeners('warning')
 process.on('warning', (w) => { if (w.name !== 'ExperimentalWarning') console.error(`(${w.name}) ${w.message}`) })
 
 // 解析命令行参数
-const { port, dir, title, maxDownloads, sources } = resolveArgs()
+const { port, dir, title, maxDownloads, split, maxConnections, sources } = resolveArgs()
 
 // 初始化工作目录
 const workDir = initStoreDir(dir)
@@ -125,7 +125,7 @@ app.useAuth('/media/thumbnails/items/:itemId', 'GET,HEAD', media.serveItemThumbn
 app.useAuth('/media/thumbnails/collections/:id', 'GET,HEAD', media.serveCollectionThumbnail)
 
 // -------- 离线下载（接口始终注册，未装 aria2 时由 status.enabled 告知前端隐藏入口）--------
-const aria2 = createAria2({ downloadDir: workDir.downloadDir, maxConcurrentDownloads: maxDownloads })
+const aria2 = createAria2({ downloadDir: workDir.downloadDir, maxConcurrentDownloads: maxDownloads, split, maxConnectionPerServer: maxConnections })
 const offline = createOfflineHandlers({
     aria2,
     downloadDir: workDir.downloadDir,
@@ -183,6 +183,8 @@ console.log(`    ${C('--port <端口>')}           监听端口          当前 
 console.log(`    ${C('--dir <路径>')}            工作目录          当前 ${dir}${srcTag('dir')}`)
 console.log(`    ${C('--title <名称>')}          系统名称          当前 ${B(`“${title}”`)}${srcTag('title')}`)
 console.log(`    ${C('--max-downloads <个>')}    下载并发上限      当前 ${B(maxDownloads)}${srcTag('maxDownloads')}`)
+console.log(`    ${C('--split <n>')}             单任务分段连接数  当前 ${B(split)}${srcTag('split')}`)
+console.log(`    ${C('--max-connections <n>')}   同源并发连接数    当前 ${B(maxConnections)}${srcTag('maxConnections')}`)
 console.log()
 console.log(`  ${B('系统依赖')}`)
 // 版本号放行尾：版本串长度不定，放中间会把说明列顶歪
@@ -200,5 +202,5 @@ console.log(`    ${C('工作目录')}  ${workDir.root}`)
 console.log(`    ${C('用户文件')}  ${usersFile}`)
 console.log(`    ${C('扫描入库')}  ${workDir.scanDir} ${DIM(`（每 ${SCAN_INTERVAL_MS / 1000}s 一轮，文件 ${SCAN_MTIME_STABLE_MS / 1000}s 无变动才入库）`)}`)
 console.log(`    ${C('上传')}      ≤${B(UPLOAD_MAX_FILES)} 个/请求 · 单文件 ≤${B(UPLOAD_MAX_SIZE)} · ${ALLOWED_EXTENSIONS.join('/')}`)
-console.log(`    ${C('离线下载')}  ${a2.ok ? `${OK(B('已启用'))} · 同时最多下载 ${B(maxDownloads)} 个任务，超出的自动排队` : `${ERR(B('未启用'))}（缺 aria2，安装见上方系统依赖）`}`)
+console.log(`    ${C('离线下载')}  ${a2.ok ? `${OK(B('已启用'))} · 同时最多 ${B(maxDownloads)} 个任务 · 单任务最多 ${B(split)} 段/同源 ${B(maxConnections)} 连接，超出的任务自动排队` : `${ERR(B('未启用'))}（缺 aria2，安装见上方系统依赖）`}`)
 console.log(`    ${C('访问地址')}  ${B(OK(`http://localhost:${port}`))}\n`)

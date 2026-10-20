@@ -24,7 +24,15 @@ export const SCAN_MTIME_STABLE_MS = 30_000
 // aria2 JSON-RPC 本地端口（仅监听 127.0.0.1，不对外）
 export const ARIA2_RPC_PORT = 6800
 // 同时下载的离线任务数上限
-export const ARIA2_MAX_CONCURRENT_DOWNLOADS = 2
+export const ARIA2_MAX_CONCURRENT_DOWNLOADS = 5
+// 单任务最大分段连接数（须 ≥ max-connection-per-server，aria2 上限 64）
+export const ARIA2_SPLIT = 16
+// 单任务对同一服务器/来源的最大并发连接数（aria2 硬上限 16）
+export const ARIA2_MAX_CONNECTION_PER_SERVER = 16
+// BT 单任务 peer 数上限（0=不限，交给带宽与磁盘扛）
+export const ARIA2_BT_MAX_PEERS = 0
+// BT 主动追快 peer 的阈值：整体速度慢于此值时 aria2 会积极寻找更多 peer
+export const ARIA2_BT_REQUEST_PEER_SPEED_LIMIT = '256K'
 // 离线下载会话持久化文件名（放在 download/ 下，重启续传用）
 export const ARIA2_SESSION_FILE = 'aria2-session.json'
 // 离线下载任务轮询刷新间隔（前端），毫秒
