@@ -68,6 +68,25 @@
         while (n >= 1024 && i < u.length - 1) { n /= 1024; i++ }
         return n.toFixed(i ? 1 : 0) + ' ' + u[i]
     }
+    const fmtSpeed = (bps) => bps > 0 ? `${fmtSize(bps)}/s` : ''
+    /** 上传测速器：由 xhr.upload.onprogress 逐次喂 loaded 字节数，返回平滑后的速度（字节/秒）；每个请求新建一个；
+     *  至少 300ms 才刷新一次读数，避免高频抖动；EMA 平滑让瞬时忽高忽低不至于满屏乱跳 */
+    function createSpeedMeter() {
+        let lastT = 0, lastL = 0, ema = 0
+        return {
+            speed(loaded) {
+                const t = performance.now()
+                if (!lastT) { lastT = t; lastL = loaded; return ema }
+                if (t - lastT < 300) return ema
+                const dl = loaded - lastL, dt = (t - lastT) / 1000
+                lastT = t; lastL = loaded
+                if (dl <= 0 || dt <= 0) return ema
+                const inst = dl / dt
+                ema = ema ? ema * 0.7 + inst * 0.3 : inst
+                return ema
+            },
+        }
+    }
     function escapeHtml(s) {
         return String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c])
     }
@@ -1668,24 +1687,39 @@
         appendBtn.type = 'button'; appendBtn.className = 'primary'
         appendBtn.textContent = '追加并保存'
         const appendHint = document.createElement('span'); appendHint.className = 'hint'
-        appendBtn.addEventListener('click', async () => {
+        // fetch 拿不到请求体的上传进度，改 XHR：追加大文件时能看百分比与速度
+        appendBtn.addEventListener('click', () => {
             const files = Array.from(appendInput.files || [])
             if (!files.length) return toast('请先选择要追加的文件')
-            appendBtn.disabled = true; appendHint.textContent = '上传中…'
+            appendBtn.disabled = true; appendHint.textContent = '上传中 0%'
             const fd = new FormData()
             for (const f of files) fd.append('files', f)
-            try {
-                const r = await fetch(`/api/collections/${d.id}/items`, { method: 'POST', body: fd, credentials: 'same-origin' })
-                const j = await r.json().catch(() => ({}))
-                if (!r.ok || j.success === false) throw new Error(j.message || ('HTTP ' + r.status))
+            const meter = createSpeedMeter()
+            const reset = () => { appendBtn.disabled = false; appendHint.textContent = '' }
+            const xhr = new XMLHttpRequest()
+            xhr.open('POST', `/api/collections/${d.id}/items`, true)
+            xhr.withCredentials = true
+            xhr.upload.onprogress = (e) => {
+                if (!e.lengthComputable) return
+                const p = e.loaded / e.total
+                // 字节传完后服务端还要算 MD5/落盘/探元数据，此时已无传输速度可显示
+                const sp = fmtSpeed(meter.speed(e.loaded))
+                appendHint.textContent = p >= 1 ? '上传完成，服务器处理中…' : `上传中 ${Math.round(p * 100)}%${sp ? ` · ${sp}` : ''}`
+            }
+            xhr.onload = async () => {
+                let j = null; try { j = JSON.parse(xhr.responseText) } catch { /* ignore */ }
+                const ok = xhr.status >= 200 && xhr.status < 300 && (!j || j.success !== false)
+                reset()
+                if (!ok) return toast('追加失败：' + ((j && j.message) || ('HTTP ' + xhr.status)), 5000, 'error')
                 appendInput.value = ''
                 toast('已追加')
                 markListDirty() // 文件数量/封面变了
                 await loadDetail(d.id)
-                // 追加后自动回到编辑态方便继续处理
+                // 追加后自动回到编辑态方便继续处理（编辑器重建，按钮态随之复原）
                 openItemEditor()
-            } catch (e) { toast('追加失败：' + e.message) }
-            finally { appendBtn.disabled = false; appendHint.textContent = '' }
+            }
+            xhr.onerror = () => { reset(); toast('追加失败：网络错误', 5000, 'error') }
+            xhr.send(fd)
         })
         append.appendChild(appendInput); append.appendChild(appendBtn); append.appendChild(appendHint)
         wrap.appendChild(append)
@@ -1789,6 +1823,7 @@
             if ($('#upCategory').value) fd.append('category', $('#upCategory').value)
             for (const f of files) fd.append('files', f)
             setAllStatus('上传中', 'doing'); setProgress(0)
+            const meter = createSpeedMeter()
             const xhr = new XMLHttpRequest()
             xhr.open('POST', '/api/upload', true)
             xhr.withCredentials = true
@@ -1796,8 +1831,9 @@
                 if (!e.lengthComputable) return
                 const p = e.loaded / e.total
                 setProgress(p)
-                // 字节传完后服务端还要算 MD5/落盘/探元数据，明确告知用户在等后端
+                // 字节传完后服务端还要算 MD5/落盘/探元数据，明确告知用户在等后端（此时已无传输速度可显示）
                 if (p >= 1) prog.textContent = '上传完成，服务器处理中…'
+                else { const sp = fmtSpeed(meter.speed(e.loaded)); if (sp) prog.textContent += ` · ${sp}` }
             }
             xhr.onload = () => {
                 let j = null
@@ -1865,12 +1901,16 @@
                 const xhr = new XMLHttpRequest()
                 xhr.open('POST', '/api/upload', true)
                 xhr.withCredentials = true
+                const meter = createSpeedMeter() // 每个文件单独测速：串行发送，同时只有一个在传
                 xhr.upload.onprogress = (e) => {
                     if (!e.lengthComputable) return
                     const p = e.loaded / e.total
                     setStatus(i, p >= 1 ? '服务器处理中…' : Math.round(p * 100) + '%', 'doing')
                     fill.style.width = Math.round(((k + Math.min(p, 1)) / total) * 100) + '%'
-                    prog.textContent = p >= 1 ? `${verb} ${k}/${total} 已完成，服务器处理中…` : `${verb} ${k}/${total} 已完成`
+                    const sp = fmtSpeed(meter.speed(e.loaded))
+                    prog.textContent = p >= 1
+                        ? `${verb} ${k}/${total} 已完成，服务器处理中…`
+                        : `${verb} ${k}/${total} 已完成${sp ? ` · ${sp}` : ''}`
                 }
                 xhr.onload = () => {
                     let j = null
