@@ -11,6 +11,8 @@ import { markListDirty, notifyList } from './list-sync.js'
 const OFFLINE_POLL_MS = 3000 // 任务列表轮询间隔，与后端 config 同名常量保持独立（前端不共享后端模块）
 const DL_STATUS_TEXT = { waiting: '队列中', active: '下载中', paused: '已暂停', complete: '已完成', error: '失败' }
 const dlCreate = { type: 'torrent', file: null, torrentB64: null, taskId: null, step: 1, poller: null }
+// 离线任务行缓存：key=任务 id（字符串），轮询时按 id 复用行 DOM，避免整表重建
+const dlRowEls = new Map()
 
 export async function checkOfflineStatus() {
     try {
@@ -52,46 +54,97 @@ function dlEta(t) {
     if (m < 60) return `剩余 ${m} 分钟`
     return `剩余 ${Math.floor(m / 60)} 小时 ${m % 60} 分`
 }
+// 动作按钮集：仅由 status + 待选态决定
+function dlActionsOf(t) {
+    const actions = []
+    if (t.status === 'complete') {
+        actions.push(`<button class="mini-btn ingest" data-act="ingest" type="button">入库</button>`)
+    } else if (t.status === 'paused') {
+        // 只有磁力待选临时任务才给“选择文件”入口；已按选择创建的正式任务文件集已固定，改选=删任务重建丢进度，只留“继续”
+        if (t.awaitingSelect) actions.push(`<button class="mini-btn" data-act="choose" type="button">选择文件</button>`)
+        actions.push(`<button class="mini-btn" data-act="resume" type="button">继续</button>`)
+    } else if (t.status === 'active' || t.status === 'waiting') {
+        actions.push(`<button class="mini-btn" data-act="pause" type="button">暂停</button>`)
+    }
+    actions.push(`<button class="mini-btn danger" data-act="del" type="button">删除</button>`)
+    return actions.join('')
+}
+// 行骨架：建一次，后续只更新其中动态字段
+function createDlRow(t) {
+    const row = document.createElement('div'); row.className = 'dl-row'; row.dataset.id = t.id
+    row.innerHTML = `
+        <div class="dl-top">
+            <span class="dl-kind"></span>
+            <span class="dl-name"></span>
+            <span class="dl-status"></span>
+            <div class="grow"></div>
+            <span class="dl-actions"></span>
+        </div>
+        <div class="dl-err hidden"></div>
+        <div class="dl-bar"><div class="dl-bar-fill" style="width:0%"></div></div>
+        <div class="dl-sub">
+            <span class="dl-pct"></span>
+            <span class="dl-size"></span>
+            <span class="dl-speed"></span>
+            <span class="dl-eta"></span>
+            <span class="dl-time"></span>
+        </div>`
+    row._c = {
+        kind: row.querySelector('.dl-kind'), name: row.querySelector('.dl-name'),
+        status: row.querySelector('.dl-status'), actions: row.querySelector('.dl-actions'),
+        err: row.querySelector('.dl-err'), bar: row.querySelector('.dl-bar-fill'),
+        pct: row.querySelector('.dl-pct'), size: row.querySelector('.dl-size'),
+        speed: row.querySelector('.dl-speed'), eta: row.querySelector('.dl-eta'), time: row.querySelector('.dl-time'),
+    }
+    row._sig = ''
+    return row
+}
+// 只在值真变时写 DOM，空 span 靠 CSS :empty 自收起，不留 flex gap
+function setText(el, s) { if (el.textContent !== s) el.textContent = s }
+function updateDlRow(row, t) {
+    const c = row._c
+    const kind = t.type === 'torrent' ? '种子' : '磁力'
+    setText(c.kind, kind)
+    const nm = t.displayName || '未命名任务'
+    if (c.name.textContent !== nm) { c.name.textContent = nm; c.name.title = t.displayName || '' }
+    setText(c.status, DL_STATUS_TEXT[t.status] || t.status)
+    const stCls = 'dl-status ' + t.status
+    if (c.status.className !== stCls) c.status.className = stCls
+    if (t.error) { c.err.classList.remove('hidden'); if (c.err.textContent !== t.error) { c.err.textContent = t.error; c.err.title = t.error } }
+    else if (!c.err.classList.contains('hidden')) c.err.classList.add('hidden')
+    const pct = dlPct(t)
+    const w = pct + '%'
+    if (c.bar.style.width !== w) c.bar.style.width = w   // 既有元素改宽度→触发 transition 动画
+    setText(c.pct, w)
+    setText(c.size, `${fmtSize(t.completedLength) || '0 B'} / ${t.totalLength ? fmtSize(t.totalLength) : '未知大小'}`)
+    setText(c.speed, t.speed ? fmtSpeed(t.speed) : '')
+    setText(c.eta, dlEta(t))
+    setText(c.time, fmtDateTime(t.createdAt))
+    const sig = t.status + '|' + (t.awaitingSelect ? '1' : '0')
+    if (row._sig !== sig) { row._sig = sig; c.actions.innerHTML = dlActionsOf(t) }
+}
 function renderOfflineTasks() {
     const wrap = $('#dlList')
-    wrap.innerHTML = ''
     $('#dlEmpty').classList.toggle('hidden', state.offlineTasks.length > 0)
     let speed = 0, active = 0
+    // 按数组顺序做 keyed reorder：行已就位则指针前移，否则 insertBefore 挪到游标处（稳定顺序下零 DOM 写）
+    let cursor = wrap.firstElementChild
     for (const t of state.offlineTasks) {
         speed += t.speed || 0
         if (t.status === 'active' || t.status === 'waiting') active++
-        const pct = dlPct(t)
-        const eta = dlEta(t)
-        const row = document.createElement('div'); row.className = 'dl-row'; row.dataset.id = t.id
-        const actions = []
-        if (t.status === 'complete') {
-            actions.push(`<button class="mini-btn ingest" data-act="ingest" type="button">入库</button>`)
-        } else if (t.status === 'paused') {
-            // 只有磁力待选临时任务才给“选择文件”入口；已按选择创建的正式任务文件集已固定，改选=删任务重建丢进度，只留“继续”
-            if (t.awaitingSelect) actions.push(`<button class="mini-btn" data-act="choose" type="button">选择文件</button>`)
-            actions.push(`<button class="mini-btn" data-act="resume" type="button">继续</button>`)
-        } else if (t.status === 'active' || t.status === 'waiting') {
-            actions.push(`<button class="mini-btn" data-act="pause" type="button">暂停</button>`)
-        }
-        actions.push(`<button class="mini-btn danger" data-act="del" type="button">删除</button>`)
-        row.innerHTML = `
-            <div class="dl-top">
-                <span class="dl-kind">${t.type === 'torrent' ? '种子' : '磁力'}</span>
-                <span class="dl-name" title="${escapeHtml(t.displayName || '')}">${escapeHtml(t.displayName || '未命名任务')}</span>
-                <span class="dl-status ${t.status}">${DL_STATUS_TEXT[t.status] || t.status}</span>
-                <div class="grow"></div>
-                <span class="dl-actions">${actions.join('')}</span>
-            </div>
-            ${t.error ? `<div class="dl-err" title="${escapeHtml(t.error)}">${escapeHtml(t.error)}</div>` : ''}
-            <div class="dl-bar"><div class="dl-bar-fill" style="width:${pct}%"></div></div>
-            <div class="dl-sub">
-                <span>${pct}%</span>
-                <span>${fmtSize(t.completedLength) || '0 B'} / ${t.totalLength ? fmtSize(t.totalLength) : '未知大小'}</span>
-                ${t.speed ? `<span>${fmtSpeed(t.speed)}</span>` : ''}
-                ${eta ? `<span class="dl-eta">${eta}</span>` : ''}
-                <span class="dl-time">${fmtDateTime(t.createdAt)}</span>
-            </div>`
-        wrap.appendChild(row)
+        const key = String(t.id)
+        let row = dlRowEls.get(key)
+        if (!row) { row = createDlRow(t); dlRowEls.set(key, row) }
+        updateDlRow(row, t)
+        if (row === cursor) cursor = cursor.nextElementSibling
+        else wrap.insertBefore(row, cursor)
+    }
+    // 游标及其后残留的都是本轮已不存在的旧行，逐个删除
+    while (cursor) {
+        const next = cursor.nextElementSibling
+        dlRowEls.delete(String(cursor.dataset.id))
+        cursor.remove()
+        cursor = next
     }
     $('#dlSummary').textContent = state.offlineTasks.length
         ? `共 ${state.offlineTasks.length} 个任务${active ? ` · ${active} 个下载中${speed ? ` · ${fmtSpeed(speed)}` : ''}` : ''}`
@@ -115,10 +168,22 @@ async function dlAction(id, act) {
         return
     }
     try {
-        if (act === 'pause') await api(`/api/offline/tasks/${id}/pause`, { method: 'POST' })
-        else if (act === 'resume') await api(`/api/offline/tasks/${id}/resume`, { method: 'POST' })
-        loadOfflineTasks()
+        if (act === 'pause') {
+            await api(`/api/offline/tasks/${id}/pause`, { method: 'POST' })
+            // 乐观回显：aria2 收下暂停后下载槽状态还有短暂滞后，立即拉会拿到旧态“闪回下载中”
+            patchLocalTask(id, { status: 'paused', speed: 0 })
+        } else if (act === 'resume') {
+            await api(`/api/offline/tasks/${id}/resume`, { method: 'POST' })
+            patchLocalTask(id, { status: 'waiting', speed: 0 })
+        }
+        setTimeout(loadOfflineTasks, 1500) // aria2 落定后再用权威状态对齐（失败/漂移以轮询为准）
     } catch (e) { toast('操作失败：' + e.message, 4000, 'error') }
+}
+/** 暂停/继续成功后先改本地副本并重渲染，不等后端往返 */
+function patchLocalTask(id, patch) {
+    const t = dlTaskById(id); if (!t) return
+    Object.assign(t, patch)
+    renderOfflineTasks()
 }
 
 // ---- 新建下载弹层 ----

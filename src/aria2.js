@@ -44,7 +44,7 @@ export function detectAria2() {
 
 /**
  * 创建 aria2 控制器。
- * @param {{ downloadDir: string, port?: number }} cfg
+ * @param {{ downloadDir: string, port?: number, maxConcurrentDownloads?: number }} cfg
  * @returns {{
  *   start: () => Promise<{ ok: boolean, reason?: string, version?: string, reused?: boolean }>,
  *   stop: () => void,
@@ -56,6 +56,7 @@ export function detectAria2() {
 export function createAria2(cfg) {
     const downloadDir = cfg.downloadDir
     const port = cfg.port || ARIA2_RPC_PORT
+    const maxConcurrentDownloads = cfg.maxConcurrentDownloads || ARIA2_MAX_CONCURRENT_DOWNLOADS
     const rpcUrl = `http://127.0.0.1:${port}/jsonrpc`
     const sessionFile = path.join(downloadDir, ARIA2_SESSION_FILE)
 
@@ -108,15 +109,17 @@ export function createAria2(cfg) {
             '--continue=true',
             '--file-allocation=none',
             '--seed-time=0',
-            `--max-concurrent-downloads=${ARIA2_MAX_CONCURRENT_DOWNLOADS}`,
+            `--max-concurrent-downloads=${maxConcurrentDownloads}`,
             '--summary-interval=0',
             '--console-log-level=warn',
         ]
         // 会话文件存在才传 input-file，避免 aria2 报错退出
         if (fs.existsSync(sessionFile)) args.push(`--input-file=${sessionFile}`)
         child = spawn(ARIA2_BIN, args, { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true })
-        child.stdout.on('data', (d) => { const s = String(d).trim(); if (s) console.log(`[aria2] ${s}`) })
-        child.stderr.on('data', (d) => { const s = String(d).trim(); if (s) console.log(`[aria2] ${s}`) })
+        // 只转发错误行：非 TTY 下 aria2 会周期性刷进度/状态与 tracker 警告，淹没服务日志；
+        // daemon 启停异常由 exit 处理器兑底，进度信息前端已有权威链路（RPC 轮询）
+        child.stdout.on('data', () => { /* 丢弃：常规输出无需入控制台 */ })
+        child.stderr.on('data', (d) => { const s = String(d).trim(); if (s && /ERROR/.test(s)) console.error(`[aria2] ${s}`) })
         child.on('exit', (code) => {
             running = false
             if (!stopping && code !== 0 && code !== null) console.error(`[aria2] daemon 异常退出（code ${code}），离线下载暂不可用`)
@@ -152,6 +155,13 @@ export function createAria2(cfg) {
         if (existing) {
             running = true
             console.log(`[aria2] 复用端口 ${port} 上已运行的 daemon（version ${existing.version}）；若其未开启 --save-session，重启续传将不可用`)
+            // 复用既存 daemon 时它带的是拉起方当时的参数，用 changeGlobalOption 把并发同步到本次配置
+            //（max-concurrent-downloads 属于可运行时变更的全局选项；失败不阻断，仅提示差异）
+            try {
+                await rpcCall('aria2.changeGlobalOption', [{ maxConcurrentDownloads: String(maxConcurrentDownloads) }])
+            } catch (e) {
+                console.warn(`[aria2] 同步并发上限 ${maxConcurrentDownloads} 失败，沿用 daemon 现有值: ${e.message}`)
+            }
             return { ok: true, version: existing.version, reused: true }
         }
         spawnDaemon()

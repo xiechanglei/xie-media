@@ -776,6 +776,8 @@ body.has-select-bar .content { padding-bottom: 84px; }
    stretch 下各 span 顶对齐会导致文字不在同一条基线上 */
 .dl-sub { display: flex; gap: 12px; font-size: 12px; color: var(--muted); margin-top: 8px; flex-wrap: wrap; align-items: baseline; }
 .dl-sub .dl-time { margin-left: auto; }
+/* 增量渲染保留固定空槽（速度/剩余不可算时），空 span 收起免得 flex gap 留白 */
+.dl-sub span:empty { display: none; }
 
 /* 新建下载弹层：来源 tab */
 .dl-tabs { display: flex; gap: 8px; padding: 16px 20px 0; }

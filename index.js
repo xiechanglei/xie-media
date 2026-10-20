@@ -5,6 +5,8 @@ import { createAuthServer } from "@xie-work/xie-auth"
 import { resolveArgs } from "./src/args.js"
 import {
     ALLOWED_EXTENSIONS,
+    SCAN_INTERVAL_MS,
+    SCAN_MTIME_STABLE_MS,
     UPLOAD_MAX_FILES,
     UPLOAD_MAX_SIZE,
 } from "./src/config.js"
@@ -17,17 +19,28 @@ import { createScanner } from "./src/scanner.js"
 import { createAria2, aria2InstallHint } from "./src/aria2.js"
 import { createOfflineHandlers } from "./src/offline.js"
 
+// 启动日志降噪：node:sqlite 的 ExperimentalWarning 每次启动都刷两行，且会连带 --trace-warnings 提示；
+// 这里接管默认输出只过滤它，其余警告（弃用等）仍照常显示。必须先于 initDb（db.js 懒加载 node:sqlite 才触发）
+process.removeAllListeners('warning')
+process.on('warning', (w) => { if (w.name !== 'ExperimentalWarning') console.error(`(${w.name}) ${w.message}`) })
+
 // 解析命令行参数
-const { port, dir, title } = resolveArgs()
+const { port, dir, title, maxDownloads, sources } = resolveArgs()
 
 // 初始化工作目录
 const workDir = initStoreDir(dir)
 
 // 打开 SQLite + 建表迁移
-initDb(workDir.dbFile)
+await initDb(workDir.dbFile)
 
-// 检测 ffmpeg（强制）
-assertFfmpegAvailable()
+// 检测 ffmpeg（必须依赖）：缺失时友好报错退出，而不是抛异常刷屏堆栈
+let ffmpegVersion
+try {
+    ffmpegVersion = assertFfmpegAvailable()
+} catch (e) {
+    console.error(`\n  ✗ 缺少必须依赖 ffmpeg，服务无法启动：\n${e.message}\n`)
+    process.exit(1)
+}
 
 // 当前文件所在目录，用于将相对路径解析为绝对路径
 const __filename = fileURLToPath(import.meta.url)
@@ -112,7 +125,7 @@ app.useAuth('/media/thumbnails/items/:itemId', 'GET,HEAD', media.serveItemThumbn
 app.useAuth('/media/thumbnails/collections/:id', 'GET,HEAD', media.serveCollectionThumbnail)
 
 // -------- 离线下载（接口始终注册，未装 aria2 时由 status.enabled 告知前端隐藏入口）--------
-const aria2 = createAria2({ downloadDir: workDir.downloadDir })
+const aria2 = createAria2({ downloadDir: workDir.downloadDir, maxConcurrentDownloads: maxDownloads })
 const offline = createOfflineHandlers({
     aria2,
     downloadDir: workDir.downloadDir,
@@ -141,11 +154,9 @@ const scanner = createScanner({
 })
 scanner.start()
 
-// -------- 离线下载：拉起 aria2 子进程（未安装则软降级，不影响主服务）--------
+// -------- 离线下载：拉起 aria2 子进程（未安装则软降级，不影响主服务；状态在启动横幅依赖区展示）--------
 const a2 = await aria2.start()
-if (!a2.ok) {
-    console.log(aria2InstallHint())
-} else {
+if (a2.ok) {
     // 会话恢复后 GID 全新，用 info_hash 认亲续传
     await offline.reconcile()
     // 进程退出时回收自拉的 daemon（SIGTERM 触发 aria2 落盘会话）
@@ -155,9 +166,39 @@ if (!a2.ok) {
     process.on('SIGTERM', () => { killAria2(); process.exit(0) })
 }
 
-console.log(`\n  ${title}`)
-console.log(`  dir   : ${workDir.root}`)
-console.log(`  scan  : ${workDir.scanDir}`)
-console.log(`  离线下载 : ${a2.ok ? `已启用 (aria2 ${a2.version})` : '未启用（缺 aria2）'}`)
-console.log(`  port  : ${port}`)
-console.log(`  ➜  http://localhost:${port}\n`)
+// ===================== 启动横幅 =====================
+// 三段式：启动参数 → 系统依赖 → 运行配置；不用分隔线框，靠 ANSI 加粗/颜色分层（终端与 WebStorm 控制台均支持）
+// ANSI 序列不占显示宽度，列对齐不受着色影响
+const B = (s) => `\x1b[1m${s}\x1b[0m`     // 加粗：标题、关键值
+const DIM = (s) => `\x1b[2m${s}\x1b[0m`   // 淡化：用法说明、“（默认）”标注等次要信息
+const C = (s) => `\x1b[36m${s}\x1b[0m`    // 青色：参数名与配置项标签
+const OK = (s) => `\x1b[32m${s}\x1b[0m`   // 绿色：就绪/已启用
+const ERR = (s) => `\x1b[31m${s}\x1b[0m`  // 红色：未就绪/未启用
+const YEL = (s) => `\x1b[33m${s}\x1b[0m`  // 黄色：安装指引
+const srcTag = (k) => sources[k] === 'default' ? DIM('（默认）') : ''
+console.log(`\n  ${B(C(title))}`)
+console.log()
+console.log(`  ${B('启动参数')} ${DIM('用法：node index.js [options]')}`)
+console.log(`    ${C('--port <端口>')}           监听端口          当前 ${B(port)}${srcTag('port')}`)
+console.log(`    ${C('--dir <路径>')}            工作目录          当前 ${dir}${srcTag('dir')}`)
+console.log(`    ${C('--title <名称>')}          系统名称          当前 ${B(`“${title}”`)}${srcTag('title')}`)
+console.log(`    ${C('--max-downloads <个>')}    下载并发上限      当前 ${B(maxDownloads)}${srcTag('maxDownloads')}`)
+console.log()
+console.log(`  ${B('系统依赖')}`)
+// 版本号放行尾：版本串长度不定，放中间会把说明列顶歪
+console.log(`    ${OK('✓')} Node     运行环境 · 内置 SQLite，无需独立数据库服务 ${DIM(`(${process.version})`)}`)
+console.log(`    ${OK('✓')} ffmpeg   必须 · 缩略图/视频裁剪 · 已就绪 ${DIM(`(${ffmpegVersion})`)}`)
+if (a2.ok) {
+    console.log(`    ${OK('✓')} aria2    可选 · 离线下载引擎 · 已就绪，不装不影响媒体功能 ${DIM(`(${a2.version})`)}`)
+} else {
+    console.log(`    ${ERR('✗')} aria2    可选 · 离线下载引擎 · ${ERR('未就绪')}，离线下载不可用`)
+    console.log(`      ${YEL('↳ ' + aria2InstallHint())}`)
+}
+console.log()
+console.log(`  ${B('运行配置')}`)
+console.log(`    ${C('工作目录')}  ${workDir.root}`)
+console.log(`    ${C('用户文件')}  ${usersFile}`)
+console.log(`    ${C('扫描入库')}  ${workDir.scanDir} ${DIM(`（每 ${SCAN_INTERVAL_MS / 1000}s 一轮，文件 ${SCAN_MTIME_STABLE_MS / 1000}s 无变动才入库）`)}`)
+console.log(`    ${C('上传')}      ≤${B(UPLOAD_MAX_FILES)} 个/请求 · 单文件 ≤${B(UPLOAD_MAX_SIZE)} · ${ALLOWED_EXTENSIONS.join('/')}`)
+console.log(`    ${C('离线下载')}  ${a2.ok ? `${OK(B('已启用'))} · 同时最多下载 ${B(maxDownloads)} 个任务，超出的自动排队` : `${ERR(B('未启用'))}（缺 aria2，安装见上方系统依赖）`}`)
+console.log(`    ${C('访问地址')}  ${B(OK(`http://localhost:${port}`))}\n`)

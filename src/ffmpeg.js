@@ -4,16 +4,19 @@ import * as fs from 'node:fs'
 import * as path from 'node:path'
 
 /**
- * 检测 ffmpeg 是否可用；不可用抛出异常。
+ * 检测 ffmpeg 是否可用；不可用抛出异常（附各平台安装指引），可用返回版本号。
+ * @returns {string} ffmpeg 版本号（如 "6.1.1"）
  */
 export function assertFfmpegAvailable() {
     const r = spawnSync('ffmpeg', ['-version'], { encoding: 'utf8' })
     if (r.error || r.status !== 0) {
         const msg = (r.error && r.error.code === 'ENOENT')
-            ? '未检测到 ffmpeg，请先安装：\n  Ubuntu/Debian: sudo apt install ffmpeg\n  macOS: brew install ffmpeg'
+            ? '未检测到 ffmpeg，请先安装：\n  Ubuntu/Debian: sudo apt install ffmpeg\n  macOS: brew install ffmpeg\n  Windows: winget install Gyan.FFmpeg（或 scoop install ffmpeg）'
             : `ffmpeg 检测失败：${r.stderr || r.error?.message || 'unknown'}`
         throw new Error(msg)
     }
+    // 首行形如 "ffmpeg version 6.1.1-ubuntu2 ..."，取主版本号（去掉发行版后缀）供启动横幅展示
+    return String(r.stdout || '').split('\n')[0].trim().split(/\s+/)[2]?.split('-')[0] || '未知版本'
 }
 
 /** 解析 ffprobe JSON 输出为需要的 meta（失败返回 null；供异步探测使用） */

@@ -517,6 +517,8 @@ export function createOfflineHandlers({ aria2, downloadDir, storeDir }) {
         const byHash = new Map()
         for (const t of ariaTasks) if (t.infoHash) byHash.set(String(t.infoHash).toLowerCase(), t)
 
+        // 启动对账只打一行汇总：逐任务日志在任务多时会把启动输出刷屏
+        let restored = 0, replayed = 0
         for (const r of rows) {
             const t = r.info_hash ? byHash.get(r.info_hash.toLowerCase()) : null
             if (!t) {
@@ -545,8 +547,10 @@ export function createOfflineHandlers({ aria2, downloadDir, storeDir }) {
             }
             dbRun(`UPDATE download_tasks SET gid=?, status=?, total_length=?, completed_length=?, updated_at=? WHERE id=?`,
                 gid, status, Number(t.totalLength) || 0, Number(t.completedLength) || 0, nowMs(), r.id)
-            console.log(`[offline] 已恢复任务「${r.display_name || r.id}」(gid ${gid}${needReplay ? '，删后重加重放选择' : ''})`)
+            restored++
+            if (needReplay) replayed++
         }
+        if (restored) console.log(`[offline] 启动对账：已恢复 ${restored} 个任务${replayed ? `（其中 ${replayed} 个重放文件选择）` : ''}`)
     }
 
     return {

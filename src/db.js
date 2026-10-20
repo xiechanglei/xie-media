@@ -1,5 +1,6 @@
 // SQLite 连接、建表迁移与基础查询封装（基于 Node 内置 node:sqlite）
-import { DatabaseSync } from 'node:sqlite'
+// 注意：node:sqlite 在 initDb 里懒加载（动态 import），否则静态 import 会在入口代码
+// 注册警告过滤前就打出 ExperimentalWarning，启动日志每次多两行噪音
 
 let _db = null
 
@@ -109,8 +110,9 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_download_tasks_infohash ON download_tasks(
  * 打开（或复用）SQLite 连接，并执行建表迁移。
  * @param {string} dbFile 数据库文件绝对路径
  */
-export function initDb(dbFile) {
+export async function initDb(dbFile) {
     if (_db) return _db
+    const { DatabaseSync } = await import('node:sqlite')
     _db = new DatabaseSync(dbFile)
     _db.exec('PRAGMA foreign_keys = ON')
     _db.exec('PRAGMA journal_mode = WAL')
