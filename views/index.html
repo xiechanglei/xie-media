@@ -45,6 +45,8 @@
             <button class="side-item active" data-scope="mine" type="button"><span class="si-ic"><svg class="ic" width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg></span><span class="si-name">我的</span><svg class="si-go" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg></button>
             <button class="side-item" data-scope="favorites" type="button"><span class="si-ic"><svg class="ic" width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.92 8.26 12 2"/></svg></span><span class="si-name">收藏</span><svg class="si-go" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg></button>
             <button class="side-item" data-scope="albums" type="button"><span class="si-ic"><svg class="ic" width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 2 7 12 12 22 7 12 2"/><polyline points="2 17 12 22 22 17"/><polyline points="2 12 12 17 22 12"/></svg></span><span class="si-name">专辑</span><svg class="si-go" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg></button>
+            <!-- 离线下载：仅在检测到 aria2 时由 JS 亮起，未安装时保持 hidden -->
+            <button class="side-item hidden" id="offlineNavItem" data-scope="offline" type="button"><span class="si-ic"><svg class="ic" width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg></span><span class="si-name">离线下载</span><svg class="si-go" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg></button>
         </nav>
         <div class="sidebar-user">
             <div class="user-card">
@@ -102,6 +104,17 @@
         <main class="content detail hidden" id="detailView">
             <div class="detail-info" id="detailInfo"></div>
             <div class="detail-body" id="detailBody"></div>
+        </main>
+
+        <!-- 离线下载视图：任务列表 + 进度，入口仅在 aria2 可用时亮起 -->
+        <main class="content hidden" id="offlineView">
+            <div class="dl-head">
+                <span class="dl-head-info" id="dlSummary"></span>
+                <div class="grow"></div>
+                <button id="dlNewBtn" class="primary" type="button">＋ 新建下载</button>
+            </div>
+            <div id="dlList" class="dl-list"></div>
+            <div id="dlEmpty" class="empty hidden">还没有下载任务</div>
         </main>
     </div>
 </div>
@@ -178,6 +191,74 @@
         <div class="lb-foot">
             <div class="lb-counter" id="lbCounter"></div>
             <div class="lb-name" id="lbName"></div>
+        </div>
+    </div>
+</div>
+
+<!-- 新建下载弹层：两步式——提交种子/磁力 → 预览文件列表勾选后开始下载 -->
+<div id="dlCreateModal" class="modal hidden" role="dialog">
+    <div class="modal-mask"></div>
+    <div class="modal-body">
+        <div class="modal-head">
+            <h3 id="dlCreateTitle">新建下载</h3>
+            <button class="close" data-close="dlCreateModal" type="button">×</button>
+        </div>
+        <!-- 步骤一：来源 -->
+        <div id="dlStep1">
+            <div class="dl-tabs">
+                <button class="dl-tab active" data-dltab="torrent" type="button">种子文件</button>
+                <button class="dl-tab" data-dltab="magnet" type="button">磁力链接</button>
+            </div>
+            <div class="dl-pane" id="dlPaneTorrent">
+                <div class="drop" id="dlTorrentDrop">点击选择或拖入 .torrent 文件<input id="dlTorrentFile" type="file" accept=".torrent" hidden></div>
+                <div class="filelist" id="dlTorrentName"></div>
+            </div>
+            <div class="dl-pane hidden" id="dlPaneMagnet">
+                <div class="form-row"><label>磁力链接 <textarea id="dlMagnet" rows="3" placeholder="magnet:?xt=urn:btih:...（建议粘贴完整链接，含 tracker 才能解析元数据）"></textarea></label></div>
+            </div>
+        </div>
+        <!-- 步骤二：选文件（元数据就绪后） -->
+        <div id="dlStep2" class="hidden">
+            <div class="merge-summary" id="dlPreviewHint">正在获取文件列表…</div>
+            <div class="dl-files" id="dlFileList"></div>
+            <div class="dl-sel-bar">
+                <button class="mini-btn" type="button" data-dlsel="all" data-dlwrap="dlFileList">全选</button>
+                <button class="mini-btn" type="button" data-dlsel="none" data-dlwrap="dlFileList">取消全选</button>
+                <span class="dl-sel-summary" id="dlSelSummary"></span>
+            </div>
+        </div>
+        <div class="modal-foot">
+            <span id="dlCreateTaskName" class="muted"></span>
+            <div class="grow"></div>
+            <button id="dlBack" class="ghost hidden" type="button">上一步</button>
+            <button class="ghost" data-close="dlCreateModal" type="button">取消</button>
+            <button id="dlSubmit" class="primary" type="button" disabled>下一步</button>
+        </div>
+    </div>
+</div>
+
+<!-- 下载入库弹层：选文件 + 标题，入库后清理任务残存文件 -->
+<div id="dlIngestModal" class="modal hidden" role="dialog">
+    <div class="modal-mask"></div>
+    <div class="modal-body">
+        <div class="modal-head">
+            <h3>下载入库</h3>
+            <button class="close" data-close="dlIngestModal" type="button">×</button>
+        </div>
+        <div class="form-row">
+            <label>标题 <input id="dlIngestTitle" type="text" placeholder="资源标题"/></label>
+        </div>
+        <div class="dl-files" id="dlIngestFiles"></div>
+        <div class="dl-sel-bar">
+            <button class="mini-btn" type="button" data-dlsel="all" data-dlwrap="dlIngestFiles">全选</button>
+            <button class="mini-btn" type="button" data-dlsel="none" data-dlwrap="dlIngestFiles">取消全选</button>
+            <span class="dl-sel-summary" id="dlIngestSelSummary"></span>
+        </div>
+        <div class="merge-warn">入库后仅保留所选文件（内容重复的会自动跳过），该任务的其余临时文件与任务记录将一并删除。</div>
+        <div class="modal-foot">
+            <div class="grow"></div>
+            <button class="ghost" data-close="dlIngestModal" type="button">取消</button>
+            <button id="dlIngestSubmit" class="primary" type="button">入库</button>
         </div>
     </div>
 </div>
@@ -316,6 +397,6 @@
 </div>
 
 <script src="/auth/xie-auth.js" data-required></script>
-<script src="/app.js"></script>
+<script type="module" src="/app.js"></script>
 </body>
 </html>

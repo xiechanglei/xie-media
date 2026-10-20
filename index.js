@@ -14,6 +14,8 @@ import { assertFfmpegAvailable } from "./src/ffmpeg.js"
 import { createMediaHandlers } from "./src/media.js"
 import { createAlbumHandlers } from "./src/album.js"
 import { createScanner } from "./src/scanner.js"
+import { createAria2, aria2InstallHint } from "./src/aria2.js"
+import { createOfflineHandlers } from "./src/offline.js"
 
 // 解析命令行参数
 const { port, dir, title } = resolveArgs()
@@ -109,6 +111,25 @@ app.useAuth('/media/items/:itemId', 'GET,HEAD', media.serveItemFile)
 app.useAuth('/media/thumbnails/items/:itemId', 'GET,HEAD', media.serveItemThumbnail)
 app.useAuth('/media/thumbnails/collections/:id', 'GET,HEAD', media.serveCollectionThumbnail)
 
+// -------- 离线下载（接口始终注册，未装 aria2 时由 status.enabled 告知前端隐藏入口）--------
+const aria2 = createAria2({ downloadDir: workDir.downloadDir })
+const offline = createOfflineHandlers({
+    aria2,
+    downloadDir: workDir.downloadDir,
+    storeDir: workDir.storeDir,
+})
+app.useAuth('/api/offline/status', 'GET', offline.status)
+app.useAuth('/api/offline/tasks', 'POST', offline.addTask)
+app.useAuth('/api/offline/tasks', 'GET', offline.listTasks)
+app.useAuth('/api/offline/preview-torrent', 'POST', offline.previewTorrent)
+app.useAuth('/api/offline/tasks/:id/preview', 'GET', offline.previewFiles)
+app.useAuth('/api/offline/tasks/:id/select', 'POST', offline.selectFiles)
+app.useAuth('/api/offline/tasks/:id/files', 'GET', offline.downloadedFiles)
+app.useAuth('/api/offline/tasks/:id/ingest', 'POST', offline.ingestTask)
+app.useAuth('/api/offline/tasks/:id/pause', 'POST', offline.pauseTask)
+app.useAuth('/api/offline/tasks/:id/resume', 'POST', offline.resumeTask)
+app.useAuth('/api/offline/tasks/:id', 'DELETE', offline.removeTask)
+
 // 启动
 app.serve(port)
 
@@ -120,8 +141,23 @@ const scanner = createScanner({
 })
 scanner.start()
 
+// -------- 离线下载：拉起 aria2 子进程（未安装则软降级，不影响主服务）--------
+const a2 = await aria2.start()
+if (!a2.ok) {
+    console.log(aria2InstallHint())
+} else {
+    // 会话恢复后 GID 全新，用 info_hash 认亲续传
+    await offline.reconcile()
+    // 进程退出时回收自拉的 daemon（SIGTERM 触发 aria2 落盘会话）
+    const killAria2 = () => aria2.stop()
+    process.on('exit', killAria2)
+    process.on('SIGINT', () => { killAria2(); process.exit(0) })
+    process.on('SIGTERM', () => { killAria2(); process.exit(0) })
+}
+
 console.log(`\n  ${title}`)
 console.log(`  dir   : ${workDir.root}`)
 console.log(`  scan  : ${workDir.scanDir}`)
+console.log(`  离线下载 : ${a2.ok ? `已启用 (aria2 ${a2.version})` : '未启用（缺 aria2）'}`)
 console.log(`  port  : ${port}`)
 console.log(`  ➜  http://localhost:${port}\n`)

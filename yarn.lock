@@ -9,10 +9,10 @@
   dependencies:
     undici-types "~6.21.0"
 
-"@xie-work/xie-auth@^1.4.3":
-  version "1.4.3"
-  resolved "http://36.33.27.166:14473/@xie-work/xie-auth/-/xie-auth-1.4.3.tgz#38df02938a3ecbd1861c6b372a37efe24588591b"
-  integrity sha512-gX64W6+ayLUM9VJb+RIaRZDiULyhK3WxghvYOFWys0/JRe6k1PBYlJaHc+ivKVNwxUaGWOdGWOGipWc++YNrFw==
+"@xie-work/xie-auth@^1.4.4":
+  version "1.4.4"
+  resolved "http://36.33.27.166:14473/@xie-work/xie-auth/-/xie-auth-1.4.4.tgz#ea2a1b3f8855d85024aa2a99d7d7409f2c2a2669"
+  integrity sha512-ofFR5wQotwWWw8/A4y6uZanRtvnYg/WROjtrBELX3L/HYlV9zxyZ9WEvtKzFSVpLjv36nrNPCSLkXboMuV3Aog==
 
 commander@^15.0.0:
   version "15.0.0"

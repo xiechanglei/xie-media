@@ -79,6 +79,30 @@ CREATE TABLE IF NOT EXISTS album_entries (
 CREATE INDEX IF NOT EXISTS idx_album_entries_album      ON album_entries(album_id, added_at DESC);
 -- 删资源时 CASCADE 要扫子表，无此索引会退化为全表扫
 CREATE INDEX IF NOT EXISTS idx_album_entries_collection ON album_entries(collection_id);
+
+-- 离线下载任务：dir 为每任务独立的下载目录（download/<id>/）；
+-- gid 是 aria2 运行时句柄，重启续传后会变，跨重启对账的锚点是 info_hash；
+-- 进度字段（total/completed/error）是轮询时的展示快照，aria2 不可达时回退用 DB 值
+CREATE TABLE IF NOT EXISTS download_tasks (
+  id               TEXT PRIMARY KEY,
+  owner_id         TEXT NOT NULL,
+  owner_name       TEXT,
+  gid              TEXT,
+  info_hash        TEXT,
+  type             TEXT NOT NULL,           -- 'torrent' | 'magnet'
+  source           TEXT NOT NULL,           -- 磁力整串 URI 或种子文件名（种子内容不落盘，会话恢复靠 aria2 session）
+  display_name     TEXT,                    -- 种子/磁力里的资源名，入库时可改
+  dir              TEXT NOT NULL,
+  status           TEXT NOT NULL DEFAULT 'waiting',  -- waiting|active|paused|complete|error
+  progression_mask TEXT,                    -- aria2 select-file 串（1-based 索引逗号分隔，如 '1,3,5'），重启对账时删后重加重放
+  total_length     INTEGER,
+  completed_length INTEGER,
+  error_message    TEXT,
+  created_at       INTEGER NOT NULL,
+  updated_at       INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_download_tasks_owner ON download_tasks(owner_id, created_at DESC);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_download_tasks_infohash ON download_tasks(info_hash) WHERE info_hash IS NOT NULL;
 `
 
 /**

@@ -11,6 +11,7 @@ import crypto from 'node:crypto'
 import { get as dbGet, run as dbRun, tx } from './db.js'
 import { probeVideoMeta } from './ffmpeg.js'
 import { classifyFile, stripExt, guessMime, shardOf } from './media.js'
+import { fileMd5Streaming, moveFile } from './files.js'
 import { findAdmin } from './user-store.js'
 import { SCAN_INTERVAL_MS, SCAN_MTIME_STABLE_MS } from './config.js'
 
@@ -18,32 +19,6 @@ const nowMs = () => Date.now()
 const newId = () => crypto.randomUUID()
 
 const DUPLICATE_SUBDIR = '.duplicates'
-
-/** 流式计算文件 md5（不整读内存） */
-function fileMd5Streaming(filePath) {
-    return new Promise((resolve, reject) => {
-        const hash = crypto.createHash('md5')
-        const rs = fs.createReadStream(filePath)
-        rs.on('error', reject)
-        rs.on('data', (d) => hash.update(d))
-        rs.on('end', () => resolve(hash.digest('hex')))
-    })
-}
-
-/** 移动文件：同盘 rename 快路径，跨盘（EXDEV）降级 copy+unlink */
-function moveFile(src, dest) {
-    fs.mkdirSync(path.dirname(dest), { recursive: true })
-    try {
-        fs.renameSync(src, dest)
-    } catch (e) {
-        if (e.code === 'EXDEV') {
-            fs.copyFileSync(src, dest)
-            fs.unlinkSync(src)
-        } else {
-            throw e
-        }
-    }
-}
 
 /**
  * 创建扫描器。

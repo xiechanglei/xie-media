@@ -740,3 +740,94 @@ body.has-select-bar .content { padding-bottom: 84px; }
     .toast { bottom: calc(24px + env(safe-area-inset-bottom)); padding: 10px 16px; font-size: 13px; }
     .detail-info .title { font-size: 20px; }
 }
+
+/* ============ 离线下载（aria2）============ */
+.dl-head { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; flex-wrap: wrap; }
+.dl-head-info { color: var(--muted); font-size: 13px; }
+.dl-list { display: flex; flex-direction: column; gap: 10px; }
+.dl-row {
+    background: var(--card); border: 1px solid var(--border); border-radius: var(--radius);
+    padding: 12px 14px; display: flex; flex-direction: column; gap: 2px;
+}
+.dl-top { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.dl-kind {
+    flex: 0 0 auto; font-size: 11px; padding: 2px 9px; border-radius: 999px;
+    background: var(--glass-soft); border: 1px solid var(--border); color: var(--muted);
+}
+.dl-name { font-weight: 600; font-size: 14px; word-break: break-all; }
+.dl-status {
+    flex: 0 0 auto; font-size: 11px; padding: 2px 9px; border-radius: 999px;
+    background: var(--glass-soft); color: var(--muted);
+}
+.dl-status.active, .dl-status.waiting { color: var(--primary); background: var(--grad-soft); }
+.dl-status.complete { color: var(--ok); background: var(--ok-soft); }
+.dl-status.error { color: var(--danger); background: var(--danger-soft); }
+.dl-err { color: var(--danger); font-size: 12px; word-break: break-all; margin-top: 4px; }
+.dl-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+/* 入库按钮：行内主行动作；显式声明全套视觉属性，防全局 button.primary 大按钮样式渗漏（同 .mini-btn.danger 规则） */
+.dl-row .mini-btn.ingest {
+    background: var(--primary); color: var(--on-primary); border: 1px solid var(--primary);
+    padding: 6px 12px; font-size: 12px; min-height: 34px; border-radius: 9px;
+}
+.dl-row .mini-btn.ingest:hover:not(:disabled) { background: var(--primary); border-color: var(--border-strong); filter: brightness(1.1); }
+.dl-bar { height: 6px; border-radius: 4px; background: var(--glass-soft); overflow: hidden; border: 1px solid var(--border); margin-top: 10px; }
+.dl-bar-fill { height: 100%; width: 0; background: var(--grad); border-radius: 4px; transition: width .5s ease; }
+/* 信息行按基线对齐：CJK（剩余 X 分钟）与纯 ASCII（百分比/速度）默认行框高度不同，
+   stretch 下各 span 顶对齐会导致文字不在同一条基线上 */
+.dl-sub { display: flex; gap: 12px; font-size: 12px; color: var(--muted); margin-top: 8px; flex-wrap: wrap; align-items: baseline; }
+.dl-sub .dl-time { margin-left: auto; }
+
+/* 新建下载弹层：来源 tab */
+.dl-tabs { display: flex; gap: 8px; padding: 16px 20px 0; }
+.dl-tab {
+    background: var(--glass-soft); border: 1px solid var(--border); border-radius: 999px;
+    color: var(--muted); padding: 7px 16px; font-size: 13px; cursor: pointer; min-height: 34px;
+    transition: background .2s, color .2s, border-color .2s;
+}
+.dl-tab.active { background: var(--grad-soft); border-color: var(--primary); color: var(--primary); font-weight: 600; }
+.dl-pane { display: block; }
+
+/* 文件勾选列表（预览/入库共用）：PC 下列表给足高度方便操作，移动端在 media query 里压回紧凑值 */
+.dl-files { max-height: clamp(220px, 44vh, 480px); overflow-y: auto; padding: 10px 20px; display: flex; flex-direction: column; gap: 4px; font-size: 13px; }
+.dl-file {
+    display: flex; gap: 9px; align-items: center; cursor: pointer; min-width: 0;
+    padding: 6px 8px; border-radius: 9px; transition: background .15s;
+    -webkit-user-select: none; user-select: none;
+}
+.dl-file:hover { background: var(--hover); }
+.dl-file input[type="checkbox"] { accent-color: var(--primary); width: 16px; height: 16px; flex: 0 0 auto; cursor: pointer; }
+.dl-file .fname { flex: 1 1 auto; min-width: 0; word-break: break-all; color: var(--fg); }
+.dl-file .ftag { flex: 0 0 auto; font-size: 11px; color: var(--muted); background: var(--glass-soft); border: 1px solid var(--border); border-radius: 999px; padding: 1px 8px; }
+.dl-file .fsize { flex: 0 0 auto; color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.dl-file.skip { opacity: .45; cursor: default; }
+.dl-file.skip:hover { background: transparent; }
+
+/* 选文件底栏：快捷操作 + 已选数量/总大小统计（预览与入库弹层共用） */
+.dl-sel-bar { display: flex; align-items: center; gap: 10px; padding: 2px 20px 10px; flex-wrap: wrap; }
+.dl-sel-summary { margin-left: auto; color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; text-align: right; }
+.dl-sel-summary b { color: var(--primary); font-weight: 700; }
+
+/* 选文件两个弹层在 PC 下加宽：长文件名不碎行、列表可视区更大；移动端沿用媒体查询里的 96vw */
+@media (min-width: 769px) {
+    #dlCreateModal .modal-body, #dlIngestModal .modal-body { width: min(760px, 94vw); }
+}
+
+/* 磁力输入 textarea：与 form-row 文本框同一视觉 */
+.form-row textarea {
+    padding: 9px 12px; border-radius: 10px; border: 1px solid var(--border); font-size: 13px;
+    background: var(--card-2); color: var(--fg); outline: none; resize: vertical;
+    font-family: inherit; transition: border-color .2s, box-shadow .2s;
+}
+.form-row textarea:focus { border-color: var(--primary); box-shadow: 0 0 0 3px rgba(124,107,255,.2); }
+
+@media (max-width: 768px) {
+    /* 移动端：任务行操作换行到独立一行，宽度自适应 */
+    .dl-top { align-items: flex-start; }
+    .dl-actions { margin-left: auto; }
+    .dl-sub .dl-time { margin-left: 0; }
+    /* 选文件列表压回紧凑高度，底栏统计独占一行 */
+    .dl-files { max-height: 34vh; padding: 8px 14px; }
+    .dl-file { padding: 5px 6px; }
+    .dl-sel-bar { padding: 2px 14px 8px; }
+    .dl-sel-summary { width: 100%; margin-left: 0; text-align: left; }
+}

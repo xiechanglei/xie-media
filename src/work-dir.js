@@ -1,4 +1,4 @@
-// 工作目录初始化：upload_temp / store / thumbnails / media.db
+// 工作目录初始化：upload_temp / store / thumbnails / scan / download / media.db
 import * as fs from "node:fs";
 import * as path from "node:path";
 
@@ -6,6 +6,7 @@ const TEMP_UPLOAD_DIR = 'upload_temp'
 const MEDIA_STORE_DIR = 'store'
 const THUMBNAIL_DIR = 'thumbnails'
 const SCAN_DIR = 'scan'
+const DOWNLOAD_DIR = 'download'
 const DB_FILE = 'media.db'
 
 function ensureDir(p) {
@@ -23,6 +24,7 @@ function ensureDir(p) {
  *   storeDir: string,
  *   thumbnailDir: string,
  *   scanDir: string,
+ *   downloadDir: string,
  *   dbFile: string
  * }}
  */
@@ -33,10 +35,11 @@ export const initStoreDir = (dir) => {
     const storeDir = path.join(root, MEDIA_STORE_DIR)
     const thumbnailDir = path.join(root, THUMBNAIL_DIR)
     const scanDir = path.join(root, SCAN_DIR)
+    const downloadDir = path.join(root, DOWNLOAD_DIR)
     ensureDir(uploadTempDir)
     ensureDir(storeDir)
     ensureDir(thumbnailDir)
     ensureDir(scanDir)
     const dbFile = path.join(root, DB_FILE)
-    return { root, uploadTempDir, storeDir, thumbnailDir, scanDir, dbFile }
+    return { root, uploadTempDir, storeDir, thumbnailDir, scanDir, downloadDir, dbFile }
 }

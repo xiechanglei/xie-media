@@ -19,3 +19,15 @@ export const UPLOAD_MAX_SIZE = '1TB'
 export const SCAN_INTERVAL_MS = 10_000
 // 半传输防护：文件 mtime 距今超过该毫秒数才认定"写完"，可入库
 export const SCAN_MTIME_STABLE_MS = 30_000
+
+// ===================== 离线下载（aria2）=====================
+// aria2 JSON-RPC 本地端口（仅监听 127.0.0.1，不对外）
+export const ARIA2_RPC_PORT = 6800
+// 同时下载的离线任务数上限
+export const ARIA2_MAX_CONCURRENT_DOWNLOADS = 2
+// 离线下载会话持久化文件名（放在 download/ 下，重启续传用）
+export const ARIA2_SESSION_FILE = 'aria2-session.json'
+// 离线下载任务轮询刷新间隔（前端），毫秒
+export const OFFLINE_POLL_MS = 3_000
+// aria2 子进程启动后等待 RPC 连通的超时（毫秒）
+export const ARIA2_RPC_READY_TIMEOUT_MS = 6_000
