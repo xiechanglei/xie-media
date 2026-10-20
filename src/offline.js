@@ -7,6 +7,8 @@
 //   选定后删临时任务 → 带 select-file 重加为官任务
 // - 种子原文备份在 <任务目录>/.source.torrent（walkFiles 跳过点文件，不入任何清单），供"重新选择"与重启重放；
 //   会话恢复不保留 select-file/pause（实测），对账靠删了重加
+// - 实测：aria2 会为多文件种子里未选中的文件也预建占位；且被选文件头/尾 piece 跨着相邻文件，跨界块写入让相邻占位非 0 字节
+//   ——入库清单以 aria2 files[].selected 为权威判据（不可用时退回 size===0）；.aria2 位图任务完成时自删，.torrent 副本随任务目录整删
 // - 入库时序（写死不可调换）：forceRemove 摘除 aria2 任务 → 选中文件算 md5 移入 store →
 //   建 collections(owner=当前用户)+items → 整目录删除任务残存文件 → 删任务行
 // - download/ 独立于 scan/，不被自动扫描器触碰；每任务一个子目录，删任务=删目录零误伤
@@ -398,23 +400,41 @@ export function createOfflineHandlers({ aria2, downloadDir, storeDir }) {
                 const cls = mediaKind(f)
                 let size = 0
                 try { size = fs.statSync(f).size } catch { /* ignore */ }
+                // aria2 会为多文件种子的未选中文件预建 0 字节占位，不属于“下下来的东西”，不收进清单
+                if (size === 0) return null
                 return {
                     index: null, name: path.relative(r.dir, f), length: size,
                     selected: true, downloadable: cls !== null,
                 }
             })
+            .filter(Boolean)
             .sort((a, b) => a.name.localeCompare(b.name))
     }
 
-    /** 入库选择用：任务目录里已落盘且属于媒体白名单的文件 */
-    function downloadedFiles(ctx) {
+    /**
+     * 入库选择用：任务目录里已落盘、且确实属于本任务所选范围的媒体文件。
+     * 以 aria2 files[].selected 为权威判据：被选文件的头/尾 piece 物理上跨着相邻未选文件，
+     * 下载跨界块时会连带创建并写入相邻文件——占位文件未必是 0 字节（可能带 ≤一个piece 的跨界残段），
+     * 仅按大小拦不住；aria2 已无此任务（重启丢失）时退回 size===0 只拦明显占位。
+     */
+    async function downloadedFiles(ctx) {
         const r = getTaskOrThrow(ctx.params.id, ctx.user)
+        let selSet = null
+        if (aria2.isRunning() && r.gid && r.progression_mask !== '') {
+            const st = await aria2.tellStatus(r.gid, ['files']).catch(() => null)
+            if (st && Array.isArray(st.files) && st.files.length) {
+                selSet = new Set(st.files.filter(f => f.selected === 'true').map(f => path.resolve(f.path)))
+            }
+        }
         const files = walkFiles(r.dir)
             .map((f) => {
+                if (selSet && !selSet.has(path.resolve(f))) return null
                 const cls = mediaKind(f)
                 if (!cls) return null
                 let size = 0
                 try { size = fs.statSync(f).size } catch { /* ignore */ }
+                // 同上：滤掉 aria2 给未选中文件预建的 0 字节占位（.mkv 等扩展名同属媒体白名单，否则会淹没入库列表）
+                if (size === 0) return null
                 return { relPath: path.relative(r.dir, f), name: path.basename(f), size, mediaType: cls.type }
             })
             .filter(Boolean)
