@@ -92,8 +92,8 @@ export function createAria2(cfg) {
         return j ? j.result : null
     }
 
-    /** tellStatus 快捷方式；fields 限定返回字段，减小响应 */
-    async function tellStatus(gid, fields = ['status', 'totalLength', 'completedLength', 'downloadSpeed', 'errorCode', 'errorMessage', 'files', 'infoHash']) {
+    /** tellStatus 快捷方式；fields 限定返回字段，减小响应（默认含 followedBy：磁力元数据阶段 GID 靠它链到真实任务） */
+    async function tellStatus(gid, fields = ['status', 'totalLength', 'completedLength', 'downloadSpeed', 'errorCode', 'errorMessage', 'files', 'infoHash', 'followedBy']) {
         return rpcCall('aria2.tellStatus', [gid, fields])
     }
 

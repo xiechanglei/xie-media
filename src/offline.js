@@ -101,13 +101,30 @@ function selectSpecFor(total, selected) {
     return set.sort((a, b) => a - b).join(',')
 }
 
-/** aria2 元数据未解析时，files 仅含一项且 path 是裸 info hash（40hex/32hex 文件名） */
+/** aria2 元数据未解析时，files 仅含一项：旧版本 path 是裸 info hash（40hex/32hex 文件名），
+ * 1.37.0 实测是 "[METADATA]<hash>" 占位文件（拿到元数据后它直接 complete，真任务在 followedBy 后继 GID 上） */
 function metadataReady(st) {
     const files = st.files || []
     if (files.length > 1) return true
     if (files.length === 0) return false
     const base = path.basename(files[0].path || '')
+    if (/^\[METADATA\]/i.test(base)) return false
     return !/^[0-9a-f]{40}$/i.test(base) && !/^[0-9a-f]{32}$/i.test(base)
+}
+
+/**
+ * 名称兑底：磁力常无 &dn=，元数据到位后用首个文件的顶层名（多文件=种子目录名，单文件=文件名）回写，
+ * 避免列表出现“未命名任务”；已有名/元数据未就绪时不动作。
+ */
+function deriveName(r, st) {
+    if (r.display_name || !st || !metadataReady(st)) return
+    const first = (st.files || [])[0]
+    if (!first) return
+    const rel = path.relative(r.dir, first.path || '')
+    const name = rel.split(path.sep)[0]
+    if (!name || name === '.' || /^\[METADATA\]/i.test(name)) return
+    r.display_name = name
+    dbRun(`UPDATE download_tasks SET display_name=? WHERE id=?`, name, r.id)
 }
 
 /**
@@ -155,19 +172,45 @@ export function createOfflineHandlers({ aria2, downloadDir, storeDir }) {
         }
     }
 
+    /**
+     * 磁力 addUri 返回的只是“元数据下载器”GID：拿到元数据后它会 complete 并用 followedBy
+     * 派生真正的 BT 任务（实测 aria2 1.37.0，种子/metalink 同机制）。沿链换成权威 GID 并回写账本，
+     * 否则文件清单永远停在 [METADATA] 占位、状态还会漂成 complete。
+     */
+    async function resolveGid(r) {
+        let gid = r.gid
+        for (let hop = 0; hop < 2; hop++) {
+            const st = await aria2.tellStatus(gid, ['followedBy']).catch(() => null)
+            const next = st && st.followedBy && st.followedBy[st.followedBy.length - 1]
+            if (!next) break
+            gid = next
+        }
+        if (gid && gid !== r.gid) {
+            dbRun(`UPDATE download_tasks SET gid=? WHERE id=?`, gid, r.id)
+            r.gid = gid
+        }
+        return gid
+    }
+
     /** 拉一次 aria2 状态并回写 DB 快照；gid 失效（重启换号/任务被清）时静默保留快照 */
     async function refreshRow(r) {
         if (!aria2.isRunning() || !r.gid || r.status === 'complete') return null
+        await resolveGid(r)
         try {
             const st = await aria2.tellStatus(r.gid)
+            deriveName(r, st)
+            let status = mapAria2Status(st.status)
+            // 待选临时任务：元数据阶段 aria2 报 active/waiting，但尚未下内容，对外按“已暂停”展示，
+            // 避免用户在选文件时看到列表里冒出个“下载中/已完成”的怪任务
+            if (r.progression_mask === '' && (status === 'active' || status === 'waiting')) status = 'paused'
             dbRun(
                 `UPDATE download_tasks SET gid=?, status=?, total_length=?, completed_length=?, error_message=?,
                  info_hash=COALESCE(?, info_hash), updated_at=? WHERE id=?`,
-                r.gid, mapAria2Status(st.status),
+                r.gid, status,
                 Number(st.totalLength) || 0, Number(st.completedLength) || 0,
                 st.errorMessage ? `${st.errorMessage}（code ${st.errorCode}）` : null,
                 st.infoHash || null, nowMs(), r.id)
-            r.status = mapAria2Status(st.status)
+            r.status = status
             return st
         } catch {
             return null
@@ -266,7 +309,12 @@ export function createOfflineHandlers({ aria2, downloadDir, storeDir }) {
             ? dbAll(`SELECT * FROM download_tasks ORDER BY created_at DESC`)
             : dbAll(`SELECT * FROM download_tasks WHERE owner_id=? ORDER BY created_at DESC`, ctx.user.id)
         const list = []
-        for (const r of rows) list.push(toView(r, await refreshRow(r)))
+        for (const r of rows) {
+            const st = await refreshRow(r)
+            // 待选临时任务只服务于选文件弹层，不出现在任务列表；选完或关窗后它会变成正式任务/被废弃
+            if (r.progression_mask === '') continue
+            list.push(toView(r, st))
+        }
         return { list, enabled: aria2.isRunning() }
     }
 
@@ -295,9 +343,11 @@ export function createOfflineHandlers({ aria2, downloadDir, storeDir }) {
             // 已完成任务可能不在 aria2 结果集中，直接以磁盘为准给出文件清单
             return { needMetadata: false, files: diskFilesToPreview(r) }
         }
+        await resolveGid(r)
         const st = await aria2.tellStatus(r.gid, ['status', 'files', 'infoHash']).catch(() => null)
         if (!st) throw new Error('无法读取任务文件列表（aria2 中已无此任务）')
         if (!metadataReady(st)) return { needMetadata: true, files: [] }
+        deriveName(r, st)
         const files = (st.files || []).map(f => ({
             index: Number(f.index),
             name: path.relative(r.dir, f.path),
@@ -339,6 +389,7 @@ export function createOfflineHandlers({ aria2, downloadDir, storeDir }) {
         // 设计：选文件只属于建任务之前的临时态；已按选择创建的任务文件集固定，改选会删任务重建丢进度
         if (r.progression_mask !== '') throw new Error('该任务已按选定文件创建，不能重新选择')
         if (!aria2.isRunning()) throw new Error('离线下载服务不可用（aria2 未运行）')
+        await resolveGid(r)
         const st = await aria2.tellStatus(r.gid, ['status', 'files']).catch(() => null)
         if (!st) throw new Error('无法读取任务文件列表（aria2 中已无此任务）')
         if (!metadataReady(st)) throw new Error('元数据尚未解析完成，请稍后再选择')
@@ -349,6 +400,11 @@ export function createOfflineHandlers({ aria2, downloadDir, storeDir }) {
             : []
         const spec = selectSpecFor(total, sel)
         await aria2.rpcCall('aria2.forceRemove', [r.gid]).catch(() => { /* 临时任务可能已消失 */ })
+        // 磁力的临时任务若已在目录里预建占位/元数据文件，先清掉，正式任务从干净目录开始
+        //（walkFiles 跳过点文件，种子的 .source.torrent 备份不受影响）
+        if (r.type === 'magnet') {
+            for (const f of walkFiles(r.dir)) { try { fs.rmSync(f) } catch { /* ignore */ } }
+        }
         let newGid
         try {
             newGid = await reAdd(r, { spec })
@@ -367,6 +423,7 @@ export function createOfflineHandlers({ aria2, downloadDir, storeDir }) {
 
     async function pauseTask(ctx) {
         const r = getTaskOrThrow(ctx.params.id, ctx.user)
+        if (aria2.isRunning()) await resolveGid(r)
         if (r.gid) await aria2.rpcCall('aria2.pause', [r.gid]).catch(e => {
             if (!/RESOURCE_NOT_FOUND|No such/i.test(e.message)) throw e
         })
@@ -377,6 +434,7 @@ export function createOfflineHandlers({ aria2, downloadDir, storeDir }) {
     async function resumeTask(ctx) {
         const r = getTaskOrThrow(ctx.params.id, ctx.user)
         if (!aria2.isRunning()) throw new Error('离线下载服务不可用（aria2 未运行）')
+        await resolveGid(r)
         await aria2.rpcCall('aria2.unpause', [r.gid])
         dbRun(`UPDATE download_tasks SET status='waiting', updated_at=? WHERE id=?`, nowMs(), r.id)
         const row = dbGet(`SELECT * FROM download_tasks WHERE id=?`, r.id)
@@ -387,6 +445,8 @@ export function createOfflineHandlers({ aria2, downloadDir, storeDir }) {
     async function removeTask(ctx) {
         const r = getTaskOrThrow(ctx.params.id, ctx.user)
         if (r.gid && aria2.isRunning()) {
+            // 先跟链再摘除：磁力账本可能还指着已 complete 的元数据父 GID，真任务（或待选暂停态）在 followedBy 后继上
+            await resolveGid(r)
             await aria2.rpcCall('aria2.forceRemove', [r.gid]).catch(() => { /* 已完成/已不存在 */ })
         }
         try { fs.rmSync(r.dir, { recursive: true, force: true }) } catch { /* ignore */ }
@@ -528,6 +588,15 @@ export function createOfflineHandlers({ aria2, downloadDir, storeDir }) {
      */
     async function reconcile() {
         if (!aria2.isRunning()) return
+        // 遗留的“待选”临时任务：选文件弹层上下文已随重启丢失，且列表不再展示它们，一律废弃
+        //（删 aria2 任务 + 删目录 + 删账本行，不留孤儿）
+        const stale = dbAll(`SELECT * FROM download_tasks WHERE progression_mask=''`)
+        for (const r of stale) {
+            if (r.gid) await aria2.rpcCall('aria2.forceRemove', [r.gid]).catch(() => { /* 可能已不存在 */ })
+            try { fs.rmSync(r.dir, { recursive: true, force: true }) } catch { /* ignore */ }
+            dbRun(`DELETE FROM download_tasks WHERE id=?`, r.id)
+        }
+        if (stale.length) console.log(`[offline] 启动对账：已清理 ${stale.length} 个未完成的选文件临时任务`)
         const rows = dbAll(`SELECT * FROM download_tasks WHERE status IN ('waiting','active','paused','error')`)
         if (!rows.length) return
         const fields = ['gid', 'status', 'infoHash', 'totalLength', 'completedLength']
@@ -542,7 +611,12 @@ export function createOfflineHandlers({ aria2, downloadDir, storeDir }) {
             return
         }
         const byHash = new Map()
-        for (const t of ariaTasks) if (t.infoHash) byHash.set(String(t.infoHash).toLowerCase(), t)
+        // 先登记优先：active/waiting（真实任务）在前，stopped 里同 hash 的元数据父任务不得顶掉它
+        for (const t of ariaTasks) {
+            if (!t.infoHash) continue
+            const h = String(t.infoHash).toLowerCase()
+            if (!byHash.has(h)) byHash.set(h, t)
+        }
 
         // 启动对账只打一行汇总：逐任务日志在任务多时会把启动输出刷屏
         let restored = 0, replayed = 0

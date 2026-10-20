@@ -1,6 +1,7 @@
 // ================= 离线下载（aria2）=================
 // 新建任务弹层状态机：种子 → 本地解析预览（不建任务）→ 勾选后一步建任务；
-// 磁力 → 先建挂起临时任务，元数据到位后勾选，/select 删临时任务重加为官任务
+// 磁力 → 先建“待选”临时任务取元数据（后端列表接口不展示它），勾选后删临时任务重加为官任务；
+// 弹层带着未提交的临时任务关闭时直接废弃，不留“未命名”垃圾任务
 import { state } from './state.js'
 import {
     $, $$, api, toast, fmtSize, fmtSpeed, fmtDateTime, escapeHtml, fileToBase64,
@@ -60,8 +61,6 @@ function dlActionsOf(t) {
     if (t.status === 'complete') {
         actions.push(`<button class="mini-btn ingest" data-act="ingest" type="button">入库</button>`)
     } else if (t.status === 'paused') {
-        // 只有磁力待选临时任务才给“选择文件”入口；已按选择创建的正式任务文件集已固定，改选=删任务重建丢进度，只留“继续”
-        if (t.awaitingSelect) actions.push(`<button class="mini-btn" data-act="choose" type="button">选择文件</button>`)
         actions.push(`<button class="mini-btn" data-act="resume" type="button">继续</button>`)
     } else if (t.status === 'active' || t.status === 'waiting') {
         actions.push(`<button class="mini-btn" data-act="pause" type="button">暂停</button>`)
@@ -152,7 +151,6 @@ function renderOfflineTasks() {
 }
 async function dlAction(id, act) {
     const t = dlTaskById(id); if (!t) return
-    if (act === 'choose') { openDlCreate(id); return }
     if (act === 'ingest') { openDlIngest(t); return }
     if (act === 'del') {
         // 与删资源同一习惯：危险操作先进确认弹层
@@ -195,29 +193,22 @@ function switchDlTab(type) {
     updateDlSubmit()
 }
 /** 任务建好但尚未放行：先预览文件再勾选，磁力元数据未到时持续轮询 */
-function openDlCreate(existingTaskId) {
+function openDlCreate() {
     stopDlPreviewPolling()
     dlCreate.type = 'torrent'; dlCreate.file = null; dlCreate.torrentB64 = null
-    dlCreate.taskId = existingTaskId || null
-    dlCreate.step = existingTaskId ? 2 : 1
+    dlCreate.taskId = null
+    dlCreate.step = 1
     $('#dlTorrentFile').value = ''
     $('#dlTorrentName').textContent = ''
     $('#dlMagnet').value = ''
     $('#dlFileList').innerHTML = ''
     $('#dlSelSummary').textContent = ''
     $('#dlPreviewHint').textContent = '正在获取文件列表…'
-    $('#dlStep1').classList.toggle('hidden', dlCreate.step === 2)
-    $('#dlStep2').classList.toggle('hidden', dlCreate.step !== 2)
-    if (existingTaskId) {
-        const t = dlTaskById(existingTaskId)
-        $('#dlCreateTitle').textContent = '选择下载文件'
-        $('#dlCreateTaskName').textContent = (t && t.displayName) || ''
-        startDlPreviewPolling(existingTaskId)
-    } else {
-        $('#dlCreateTitle').textContent = '新建下载'
-        $('#dlCreateTaskName').textContent = ''
-        switchDlTab('torrent')
-    }
+    $('#dlStep1').classList.remove('hidden')
+    $('#dlStep2').classList.add('hidden')
+    $('#dlCreateTitle').textContent = '新建下载'
+    $('#dlCreateTaskName').textContent = ''
+    switchDlTab('torrent')
     updateDlSubmit()
     openModal('dlCreateModal')
 }
@@ -282,6 +273,8 @@ async function dlSubmitAction() {
                 })
             }
             stopDlPreviewPolling()
+            // 先清 taskId 再关窗：避免关窗废弃逻辑误删刚建好的正式任务
+            dlCreate.taskId = null
             closeModal('dlCreateModal'); toast('已开始下载')
             loadOfflineTasks()
         } catch (e) { toast('启动失败：' + e.message, 5000, 'error') }
@@ -393,7 +386,7 @@ async function openDlIngest(t) {
 }
 
 export function initOffline() {
-    $('#dlNewBtn').addEventListener('click', () => openDlCreate(null))
+    $('#dlNewBtn').addEventListener('click', () => openDlCreate())
     $('#dlList').addEventListener('click', e => {
         const b = e.target.closest('[data-act]'); if (!b) return
         const row = b.closest('.dl-row'); if (!row) return
@@ -421,9 +414,18 @@ export function initOffline() {
     // 选文件底栏：全选/取消全选（预览与入库两个弹层共用一套委托）
     $$('.dl-sel-bar [data-dlsel]').forEach(b =>
         b.addEventListener('click', () => dlSetAll(b.dataset.dlwrap, b.dataset.dlsel === 'all')))
-    // 弹层关闭时停止预览轮询（观察 class 变化，覆盖所有关闭路径）
+    // 弹层关闭时停止预览轮询；若还挂着未提交的待选临时任务（磁力取元数据用），直接废弃，
+    // 它本就不该出现在列表里，留着只会变成“未命名任务”垃圾
     new MutationObserver(() => {
-        if ($('#dlCreateModal').classList.contains('hidden')) stopDlPreviewPolling()
+        if ($('#dlCreateModal').classList.contains('hidden')) {
+            stopDlPreviewPolling()
+            if (dlCreate.taskId) {
+                const id = dlCreate.taskId; dlCreate.taskId = null
+                api(`/api/offline/tasks/${id}`, { method: 'DELETE' })
+                    .then(() => loadOfflineTasks())
+                    .catch(() => { /* 已选完被后端删掉/已不存在，重启对账会兜底清理 */ })
+            }
+        }
     }).observe($('#dlCreateModal'), { attributes: true, attributeFilter: ['class'] })
     // 入库
     $('#dlIngestSubmit').addEventListener('click', async () => {
