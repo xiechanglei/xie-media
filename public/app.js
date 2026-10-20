@@ -1154,10 +1154,15 @@
         if (oldV && !oldV.paused) { try { oldV.pause() } catch { } }
         body.innerHTML = ''
         const canMutate = state.user && (d.ownerId === state.user.id || state.user.role === 'admin')
-        // 文件列表上方操作条：编辑态只留“完成编辑”，浏览态放切换浏览 + 所有者操作
+        // 文件列表上方操作条：编辑态放“完成编辑（保存并退出）”与“退出编辑（放弃并退出）”，浏览态放切换浏览 + 所有者操作
         const btns = []
         if (canMutate) {
-            btns.push(`<button class="mini-btn" data-act="edit-items" type="button">${icon(state.itemEditorOpen ? 'check' : 'pencil', 13)} ${state.itemEditorOpen ? '完成编辑' : '编辑文件'}</button>`)
+            if (state.itemEditorOpen) {
+                btns.push(`<button class="mini-btn" data-act="edit-items" type="button" title="保存改动并退出编辑">${icon('check', 13)} 完成编辑</button>`)
+                btns.push(`<button class="mini-btn" data-act="exit-items" type="button" title="放弃未保存的改动并退出编辑">${icon('undo', 13)} 退出编辑</button>`)
+            } else {
+                btns.push(`<button class="mini-btn" data-act="edit-items" type="button">${icon('pencil', 13)} 编辑文件</button>`)
+            }
         }
         if (!state.itemEditorOpen) {
             btns.push(`<button class="mini-btn" data-act="view" type="button" title="切换浏览方式">${icon(state.viewMode === 'list' ? 'grid' : 'list', 13)} ${state.viewMode === 'list' ? '平铺' : '列表'}</button>`)
@@ -1308,6 +1313,7 @@
         if (act === 'vis') return toggleVis(d)
         if (act === 'edit-meta') return openEditMeta()
         if (act === 'edit-items') return toggleItemEditor()
+        if (act === 'exit-items') return exitItemEditor()
         if (act === 'album') return openAlbumModal([d.id])
         if (act === 'trim') return openTrimModal()
         if (act === 'del') return confirmDelete(d)
@@ -1494,20 +1500,44 @@
 
     // ================= item 编辑器（重命名 / 删除 / 排序 / 追加）=================
     function toggleItemEditor() {
-        if (state.itemEditorOpen) closeItemEditor()
+        // “完成编辑”必须带保存：曾经这里只关编辑态，标删/改名全被静默丢弃（用户以为删了，服务端其实没动）
+        if (state.itemEditorOpen) finishItemEditor()
         else openItemEditor()
+    }
+    /** 编辑器里是否有标删 / 改名 / 拖序的未保存改动 */
+    function itemEditorDirty() {
+        const d = state.detail; if (!d || !state.itemEditor) return false
+        if (d.items.map(it => String(it.id)).join(',') !== (state.itemEditorOrder0 || '')) return true
+        return d.items.some(it => {
+            const st = state.itemEditor[it.id] || {}
+            return st.deleted || (st.name ?? '') !== (it.name ?? '')
+        })
+    }
+    /** “完成编辑”：有改动走保存（成功自动关、失败保持编辑态并提示），无改动直接关，也免得空发一次 PATCH */
+    function finishItemEditor() {
+        if (itemEditorDirty()) saveItemEditor()
+        else closeItemEditor()
+    }
+    /** “退出编辑”：有未保存改动先确认再丢弃，无改动直接关 */
+    function exitItemEditor() {
+        if (!itemEditorDirty()) { closeItemEditor(); return }
+        openModal('confirmModal')
+        $('#confirmText').textContent = '当前有未保存的修改（改名 / 删除 / 排序），退出编辑将丢弃这些改动，确定退出？'
+        $('#confirmOk').onclick = () => { closeModal('confirmModal'); closeItemEditor() }
     }
     function openItemEditor() {
         const d = state.detail; if (!d) return
         state.itemEditorOpen = true
         state.itemEditor = {}
         d.items.forEach(it => { state.itemEditor[it.id] = { name: it.name, deleted: false } })
+        state.itemEditorOrder0 = d.items.map(it => String(it.id)).join(',') // 开局快照，退出时比对是否拖过序
         renderDetailBody()
     }
     function closeItemEditor() {
         state.itemEditorOpen = false
         state.itemEditor = null
         state.itemAppending = false
+        state.itemEditorOrder0 = ''
         renderDetailBody()
     }
     async function saveItemEditor() {
@@ -1543,7 +1573,7 @@
         const wrap = document.createElement('div'); wrap.className = 'item-editor'
 
         const head = document.createElement('div'); head.className = 'item-editor-foot'
-        head.innerHTML = `<span class="hint">修改显示名 · 删除 · 按住左侧把手拖动排序（或用上下按钮）· 保存后写回服务器</span>`
+        head.innerHTML = `<span class="hint">修改显示名 · 删除 · 按住左侧把手拖动排序（或用上下按钮）· 点上方「完成编辑」写回服务器</span>`
         wrap.appendChild(head)
 
         const rowsEl = document.createElement('div')
@@ -1660,16 +1690,7 @@
         append.appendChild(appendInput); append.appendChild(appendBtn); append.appendChild(appendHint)
         wrap.appendChild(append)
 
-        // 底部：保存 / 取消
-        const foot = document.createElement('div'); foot.className = 'item-editor-foot'
-        const saveBtn = document.createElement('button'); saveBtn.type = 'button'; saveBtn.className = 'primary'
-        saveBtn.textContent = '保存'
-        saveBtn.addEventListener('click', saveItemEditor)
-        const cancelBtn = document.createElement('button'); cancelBtn.type = 'button'; cancelBtn.className = 'ghost'
-        cancelBtn.textContent = '取消'
-        cancelBtn.addEventListener('click', closeItemEditor)
-        foot.appendChild(saveBtn); foot.appendChild(cancelBtn)
-        wrap.appendChild(foot)
+        // 尾部保存/取消已去掉：提交与放弃统一由顶部操作条的“完成编辑 / 退出编辑”承担，避免两套语义重复
         return wrap
     }
 
