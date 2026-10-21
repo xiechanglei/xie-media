@@ -13,7 +13,7 @@ import crypto from 'node:crypto'
 import { all as dbAll, get as dbGet, run as dbRun, tx } from './db.js'
 import { VIDEO_EXTENSIONS, IMAGE_EXTENSIONS } from './config.js'
 import { ensureVideoThumbnail, probeVideoMeta, trimVideoKeepRange } from './ffmpeg.js'
-import { fileMd5Streaming } from './files.js'
+import { fileMd5Streaming, moveFile } from './files.js'
 import { findActiveUser, listActiveUsers } from './user-store.js'
 
 const PLACEHOLDER_SVG = Buffer.from(
@@ -125,10 +125,10 @@ export function mapCollectionCard(row, userId) {
 
 /**
  * 创建业务处理器集合。
- * @param {{ storeDir: string, thumbnailDir: string, usersFile: string }} cfg
+ * @param {{ storeDir: string, thumbnailDir: string, usersFile: string, trimTempDir: string }} cfg
  */
 export function createMediaHandlers(cfg) {
-    const { storeDir, thumbnailDir, usersFile } = cfg
+    const { storeDir, thumbnailDir, usersFile, trimTempDir } = cfg
 
     /** 返回 md5 在 store/ 下的绝对路径（不保证存在）：store/<xx>/<md5> */
     const md5ToPath = (md5) => path.join(storeDir, shardOf(md5), md5)
@@ -172,6 +172,19 @@ export function createMediaHandlers(cfg) {
             if (countMd5Refs(r.md5) > 0) { dbRun(`DELETE FROM pending_deletes WHERE md5=?`, r.md5); continue }
             if (purgeMd5Files(r.md5)) { dbRun(`DELETE FROM pending_deletes WHERE md5=?`, r.md5); removed++ }
         }
+        return removed
+    }
+
+    /** 启动清理裁剪过程文件：trim_temp/ 里的残留意味着上次进程没能收尾（崩溃/断电/强杀），
+     *  正常流程下搬入 store 或失败都会即时删除，故残留一律可直删；仍被占用的留下轮 */
+    function cleanupTrimTemp() {
+        let removed = 0
+        try { fs.mkdirSync(trimTempDir, { recursive: true }) } catch { }
+        try {
+            for (const f of fs.readdirSync(trimTempDir)) {
+                try { fs.unlinkSync(path.join(trimTempDir, f)); removed++ } catch { }
+            }
+        } catch { }
         return removed
     }
 
@@ -638,9 +651,10 @@ export function createMediaHandlers(cfg) {
         const from = keep === 'after' ? cutAt : null
         const to = keep === 'before' ? cutAt : null
 
-        // 临时文件与目标同分片目录（同盘 rename 快）；后缀沿用原扩展名让 ffmpeg 选对容器
+        // 裁剪产物先落专用过程目录 trim_temp/：不再污染 store 分片目录，
+        // 崩溃/断电留下的残留启动时由 cleanupTrimTemp 整目录清空；后缀沿用原扩展名让 ffmpeg 选对容器
         const ext = (item.ext || 'mp4').toLowerCase()
-        const tmpPath = path.join(path.dirname(filePath),
+        const tmpPath = path.join(trimTempDir || storeDir,
             `${item.md5}.trim-${Date.now()}-${crypto.randomUUID()}.${ext}`)
         let newMd5, finalPath
         try {
@@ -655,13 +669,15 @@ export function createMediaHandlers(cfg) {
                 inputDurationSec: durationSec,
             })
             // 按新内容寻址落盘：库里已有同内容文件则直接复用，丢弃临时产物；
-            // rename 目标是全新路径，旧文件被播放器占用也不影响这一步
+            // 目标是全新路径，旧文件被播放器占用也不影响这一步；
+            // 过程目录与 store 可能跨盘，moveFile 对 EXDEV 自动降级 copy+unlink，
+            // 并确保新 md5 的分片子目录存在（首次出现该前缀时）
             newMd5 = await fileMd5Streaming(tmpPath)
             finalPath = md5ToPath(newMd5)
             if (fs.existsSync(finalPath)) {
                 try { fs.unlinkSync(tmpPath) } catch {}
             } else {
-                fs.renameSync(tmpPath, finalPath)
+                moveFile(tmpPath, finalPath)
             }
         } catch (e) {
             try { if (fs.existsSync(tmpPath)) fs.unlinkSync(tmpPath) } catch {}
@@ -852,7 +868,7 @@ export function createMediaHandlers(cfg) {
         listMedia, upload,
         getCollection, updateCollection, updateCollectionVisibility, deleteCollection,
         patchItems, collectionAddItems, mergeCollections, batchCollections, transferCollections, listUsers,
-        trimItemVideo, itemMd5Refs, cleanupPendingDeletes,
+        trimItemVideo, itemMd5Refs, cleanupPendingDeletes, cleanupTrimTemp,
         addFavorite, removeFavorite,
         serveItemFile, serveCollectionThumbnail, serveItemThumbnail,
     }

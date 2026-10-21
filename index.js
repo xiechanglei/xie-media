@@ -54,6 +54,7 @@ const media = createMediaHandlers({
     storeDir: workDir.storeDir,
     thumbnailDir: workDir.thumbnailDir,
     usersFile,
+    trimTempDir: workDir.trimTempDir,
 })
 
 // 专辑只读写数据库，不碰磁盘文件，故无需工作目录配置
@@ -162,6 +163,10 @@ scanner.start()
 // 启动先扫一轮，之后定时重试；挂账在 pending_deletes 表，跨重启不丢 --------
 try { media.cleanupPendingDeletes() } catch (e) { console.warn('[pending-deletes] 启动清扫失败:', e.message) }
 setInterval(() => { try { media.cleanupPendingDeletes() } catch { /* 单轮失败下轮重试 */ } }, PENDING_DELETE_SWEEP_MS)
+
+// -------- 裁剪过程文件：trim_temp/ 里的残留意味着上次没能收尾（崩溃/断电/强杀），启动即清空 --------
+const trimLeftovers = media.cleanupTrimTemp()
+if (trimLeftovers) console.log(`[trim_temp] 已清理上次残留的裁剪过程文件 ${trimLeftovers} 个`)
 
 // -------- 离线下载：拉起 aria2 子进程（未安装则软降级，不影响主服务；状态在启动横幅依赖区展示）--------
 const a2 = await aria2.start()
