@@ -71,11 +71,27 @@ const REENCODE_MAX_SEC = 600
 /** 流拷贝产物与原片时长差小于该秒数，视为“剪了等于没剪”（切点回弹到首部关键帧），判定本次裁剪失败 */
 const COPY_NOOP_TOLERANCE_SEC = 0.5
 
+// NVENC（NVIDIA 显卡硬件编码）能力探测：进程内只实测一次并缓存。
+// 只看 ffmpeg -encoders 里有 h264_nvenc 不够（仅代表编译进去），必须实跑一帧确认驱动/会话可用，
+// 故用 -f null 不落盘地编一段极短测试源；不可用则重编码全走 CPU，绝不影响裁剪成功。
+let _nvencOk = null
+function hasNvenc() {
+    if (_nvencOk != null) return _nvencOk
+    try {
+        const r = spawnSync('ffmpeg', ['-hide_banner', '-loglevel', 'error', '-y',
+            '-f', 'lavfi', '-i', 'testsrc=duration=0.2:size=320x240:rate=5',
+            '-c:v', 'h264_nvenc', '-f', 'null', '-'], { encoding: 'utf8', timeout: 15000 })
+        _nvencOk = !r.error && r.status === 0
+    } catch { _nvencOk = false }
+    if (_nvencOk) console.log('[ffmpeg] 检测到 NVIDIA 显卡（h264_nvenc），视频重编码将走 GPU 加速')
+    return _nvencOk
+}
+
 /**
  * 视频裁剪：只保留 [startSec, endSec] 这一连续区间，两端都可传 null 表示那一头不动。
  * 典型用法是一刀两断：留 startSec=null 即只剪片尾，留 endSec=null 即只剪片头。
  * 按原片时长分流：
- * - 短视频（≤REENCODE_MAX_SEC）：直接重编码，帧级精确且耗时可接受；
+ * - 短视频（≤REENCODE_MAX_SEC）：直接重编码，帧级精确且耗时可接受（本机探测到 NVENC 时优先 h264_nvenc 显卡加速，失败自动回退 libx264）；
  * - 长视频：走 -c copy 流拷贝（不解码，耗时接近一次 remux），但 copy 只能在关键帧下刀，
  *   切点会回弹到其前最近的关键帧，关键帧间隔大时（录屏/TS 压制源首关键帧在 0s）可能剪了等于没剪；
  *   故产物时长与原片几乎一致时直接判失败报错，不自作主张降级重编码（长视频重编码耗时不可控，
@@ -97,12 +113,21 @@ export function trimVideoKeepRange({ inputPath, outputPath, startSec, endSec, ha
         '-c', 'copy', '-avoid_negative_ts', 'make_zero',
         ...faststartFor(ext), outputPath]
     const encodeArgs = [...head, ...range, ...encodeArgsFor(ext, hasAudio), '-map_metadata', '0', outputPath]
+    // 重编码统一入口：支持 GPU 的容器（非 webm）且本机探测到 NVENC 时先走 h264_nvenc，
+    // 一旦 GPU 编码失败（驱动掉线/会话数满/码流不支持）自动回退 CPU 的 libx264，保证任何输入都能剪
+    const runEncode = () => {
+        const gpuArgs = nvencArgsFor(ext, hasAudio)
+        if (!gpuArgs || !hasNvenc()) return runFfmpeg(encodeArgs, '重编码')
+        return runFfmpeg([...head, ...range, ...gpuArgs, '-map_metadata', '0', outputPath], 'GPU 重编码')
+            .catch(gpuErr => runFfmpeg(encodeArgs, '重编码')
+                .catch(cpuErr => { throw new Error(`${cpuErr.message}（GPU 编码先失败：${gpuErr.message}）`) }))
+    }
     // 探不到原时长（meta 异常）时无法分流，保守走 copy 路径
     if (inputDurationSec && inputDurationSec <= REENCODE_MAX_SEC) {
-        return runFfmpeg(encodeArgs, '重编码')
+        return runEncode()
     }
     return runFfmpeg(copyArgs, '流拷贝')
-        .catch(copyErr => runFfmpeg(encodeArgs, '重编码')
+        .catch(copyErr => runEncode()
             .catch(encodeErr => { throw new Error(`${encodeErr.message}（流拷贝先失败：${copyErr.message}）`) }))
         .then(async () => {
             // 剪后产物与原片时长几乎一致 = 刀根本没落下去（切点回弹到了片头关键帧），明确报失败
@@ -145,6 +170,20 @@ function encodeArgsFor(ext, hasAudio) {
             ...(hasAudio ? ['-c:a', 'libopus', '-b:a', '128k'] : [])]
     }
     return ['-c:v', 'libx264', '-preset', 'veryfast', '-crf', '20', '-pix_fmt', 'yuv420p',
+        ...(hasAudio ? ['-c:a', 'aac', '-b:a', '160k'] : []),
+        ...((e === 'mp4' || e === 'mov') ? ['-movflags', '+faststart'] : [])]
+}
+
+/**
+ * NVIDIA 显卡（h264_nvenc）重编码参数：仅用于 mp4/mov/mkv 等 H.264 容器；webm 返回 null 表示不用 GPU。
+ * -preset p5（速度与质量均衡）、-rc vbr -cq 23 -b:v 0（按质量恒定时长无关的码率控制，对标 x264 的 crf）；
+ * 音频仍用 CPU 的 aac（NVENC 只编视频），faststart 与 CPU 路径一致。
+ * 探测与失败回退由 hasNvenc()/runEncode 统一处理，这里只给参数。
+ */
+function nvencArgsFor(ext, hasAudio) {
+    const e = (ext || '').toLowerCase()
+    if (e === 'webm') return null
+    return ['-c:v', 'h264_nvenc', '-preset', 'p5', '-rc', 'vbr', '-cq', '23', '-b:v', '0', '-pix_fmt', 'yuv420p',
         ...(hasAudio ? ['-c:a', 'aac', '-b:a', '160k'] : []),
         ...((e === 'mp4' || e === 'mov') ? ['-movflags', '+faststart'] : [])]
 }

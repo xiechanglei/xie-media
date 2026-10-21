@@ -108,7 +108,7 @@ export function renderDetailBody() {
             // 列表模式且当前项是视频：可掐头去尾（只保留连续一段），完成后生成新文件并替换引用
             const cur = d.items[state.detailCurrentIdx]
             if (state.viewMode === 'list' && cur && cur.mediaType === 'video') {
-                btns.push(`<button class="mini-btn" data-act="trim" type="button" title="裁掉片头或片尾：只保留一段连续内容；短视频（10分钟内）重编码精确裁剪，长视频流拷贝快速裁剪（切点落在关键帧间隔内会提示失败），完成后生成新文件并替换引用">${icon('scissors', 13)} 裁剪</button>`)
+                btns.push(`<button class="mini-btn" data-act="trim" type="button" title="裁掉片头或片尾：只保留一段连续内容；短视频（10分钟内）重编码精确裁剪（有 NVIDIA 显卡时自动走 GPU 加速），长视频流拷贝快速裁剪（切点落在关键帧间隔内会提示失败），完成后生成新文件并替换引用">${icon('scissors', 13)} 裁剪</button>`)
             }
             btns.push(`<button class="mini-btn danger" data-act="del" type="button">${icon('trash', 13)} 删除</button>`)
         }
