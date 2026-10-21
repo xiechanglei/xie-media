@@ -9,7 +9,7 @@ import {
 import { icon } from './icons.js'
 import { openModal, closeModal, getStashedPlayer } from './player.js'
 import { applyFavChange, applyVisChange, notifyList, markListDirty } from './list-sync.js'
-import { removeItemFromList } from './list.js'
+import { removeItemFromList, refreshCollectionCovers } from './list.js'
 import { gotoList } from './router.js'
 import { openAlbumModal } from './albums.js'
 import { toggleItemEditor, exitItemEditor, buildItemEditor } from './item-editor.js'
@@ -439,10 +439,12 @@ function openTrimModal() {
             })
             if (j && j.data && Array.isArray(j.data.items)) { d.items = j.data.items; d.itemCount = d.items.length }
             const tr = (j && j.data && j.data.trim) || {}
-            // 只给本次换了文件的资源置戳：其余封面 URL 不变、继续命中浏览器缓存（全局单戳会让全库图片重下载）
-            markMediaStale({ items: tr.itemIds, collections: tr.collectionIds })
-            notifyList({ type: 'stale-media', items: tr.itemIds, collections: tr.collectionIds }) // 其他标签页同步置戳（内存里的戳各页私有）
-            markListDirty()            // 时长/体积变了，列表卡片聚合信息也要重拉；其他被换引用的资源也靠它刷新
+            // 只处理本次真正换了文件的资源：换戳后就地刷新这几张卡的封面，不再整列表 softReload
+            // （裁剪不改列表成员，只改封面；时长/体积等次要信息随下次正常加载自然更新）
+            const staleCols = (tr.collectionIds && tr.collectionIds.length) ? tr.collectionIds : [d.id]
+            markMediaStale({ items: tr.itemIds, collections: staleCols })
+            refreshCollectionCovers(staleCols) // 本标签页背后若有列表 DOM，就地换图
+            notifyList({ type: 'thumb-changed', items: tr.itemIds, collections: staleCols }) // 其他标签页同步换图
             closeModal('trimModal')
             renderDetail()
             toast(tr.updatedRefs

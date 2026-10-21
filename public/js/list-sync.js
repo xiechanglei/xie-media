@@ -4,7 +4,7 @@
 import { state } from './state.js'
 import { $, markMediaStale } from './utils.js'
 import { icon } from './icons.js'
-import { softReload, removeItemFromList } from './list.js'
+import { softReload, removeItemFromList, refreshCollectionCovers } from './list.js'
 
 const listBC = 'BroadcastChannel' in window ? new BroadcastChannel('xm-list-sync') : null
 
@@ -46,8 +46,11 @@ export function initListSync() {
         if (msg.type === 'fav') return applyFavChange(msg.id, msg.favorited)
         if (msg.type === 'vis') return applyVisChange(msg.id, msg.visibility)
         // 媒体文件本体被替换（裁剪）：按服务端返回的受影响 id 精准置戳，只失效这几个资源的 URL，
-        // 其余封面继续命中缓存；戳虽落 localStorage，但已加载页的内存副本各页私有，必须广播
-        if (msg.type === 'stale-media') return markMediaStale({ items: msg.items, collections: msg.collections })
+        // 其余封面继续命中缓存；换戳后就地重设这几张卡的 <img>，不整列表重载（戳是内存态，各页私有须各自刷）
+        if (msg.type === 'thumb-changed') {
+            markMediaStale({ items: msg.items, collections: msg.collections })
+            return refreshCollectionCovers(msg.collections)
+        }
         if (msg.type === 'dirty') {
             if (state.view !== 'list') return
             if (document.hidden) { pendingDirty = true; return }

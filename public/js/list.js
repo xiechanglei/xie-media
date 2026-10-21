@@ -76,11 +76,11 @@ export async function softReload() {
         state.total = total
         state.page = got
         state.hasMore = out.length < total
-        // 静默替换：重建期间禁用入场动画，否则每张卡重放 cardIn 错峰淡入，看起来像“全部重刷”
+        // 静默替换：差量重挂，未变卡片原 DOM 不动（图片不重挂），仅变动项重建；
+        // no-anim 只约束本次被重建的卡片，不重放入场动画
         const grid = $('#grid')
         grid.classList.add('no-anim')
-        grid.innerHTML = ''
-        renderAppend(state.list)
+        renderSync(state.list)
         grid.classList.remove('no-anim')
         renderAlbumHead()
         $('#endMsg').classList.toggle('hidden', state.hasMore || state.list.length === 0)
@@ -148,9 +148,43 @@ function renderAppend(items) {
     clearSkeleton()
     for (const it of items) {
         const card = renderCard(it)
+        card.dataset.sig = JSON.stringify(it) // 数据指纹：软刷新差量对比用（见 renderSync）
         // 入场错峰：按当前列数循环递增延迟，首屏卡片像瀑布一样依次浮现
         card.style.setProperty('--d', (grid.children.length % 12) * 45 + 'ms')
         grid.appendChild(card)
+    }
+}
+/** 差量重挂（softReload 专用）：同 id 且数据未变的卡片保留原 DOM 节点——
+ *  img 不重建就不会重走加载/解码，避免“整屏图片跟着刷一遍”的视觉噪音；
+ *  变了/新增的才重建，不在列表里的移除；排序复用 appendChild 移动，
+ *  同文档内移动节点不会丢已加载的图片状态 */
+function renderSync(items) {
+    const grid = $('#grid')
+    const keep = new Map()
+    for (const el of Array.from(grid.children)) {
+        if (el.classList.contains('card') && el.dataset.id) keep.set(el.dataset.id, el)
+    }
+    for (const it of items) {
+        const key = String(it.id)
+        const sig = JSON.stringify(it)
+        const old = keep.get(key)
+        let el
+        if (old && old.dataset.sig === sig) el = old // 数据原样：节点不动
+        else { el = renderCard(it); el.dataset.sig = sig }
+        keep.delete(key)
+        grid.appendChild(el)
+    }
+    for (const el of keep.values()) el.remove()
+}
+/** 精准刷新封面（裁剪等只改文件本体、不改列表成员的场景）：
+ *  只把受影响 collection 对应的 <img.cover> 重新赋值（戳已由 markMediaStale 更新，URL 变化即触发重拉），
+ *  其余卡片一个节点都不动；用遍历判断 src 前缀而非属性选择器，顺带覆盖专辑目录页里以该资源为封面的卡片 */
+export function refreshCollectionCovers(colIds = []) {
+    const set = new Set(colIds.map(String))
+    if (!set.size) return
+    for (const img of $$('#grid img.cover')) {
+        const m = (img.getAttribute('src') || '').match(/\/thumbnails\/collections\/([^/?]+)/)
+        if (m && set.has(m[1])) img.src = coverUrl(m[1])
     }
 }
 /** 专辑目录页卡片：封面跟随册内最新的可见资源，一册全不可见时用占位图 */
