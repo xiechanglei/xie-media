@@ -4,7 +4,7 @@ import { state } from './state.js'
 import { $, $$ } from './utils.js'
 import { clearStashedPlayer } from './player.js'
 import { exitSelectMode, syncSelectUI } from './selection.js'
-import { reset, renderAlbumHead } from './list.js'
+import { reset, softReload, renderAlbumHead } from './list.js'
 import { loadDetail } from './detail.js'
 import { syncSidebarActive, syncUploadBtnVisible, hideTopbarListOnly, showTopbarListOnly } from './chrome.js'
 import { startOfflinePolling, stopOfflinePolling } from './offline.js'
@@ -74,8 +74,10 @@ export function applyRoute(route) {
         syncSidebarActive()
         syncUploadBtnVisible()
         syncSelectUI()
-        if (scopeChanged || state.listDirty || state.list.length === 0) { state.listDirty = false; reset() }
-        else renderAlbumHead() // 同专辑返回：不重拉，但横幅要随 scope 切换回到正确显示状态
+        // 切 scope / 列表本来为空才从头重载；同 scope 返回且只是脏标记 → 软刷新保住已加载规模与滚动位置
+        if (scopeChanged || state.list.length === 0) { state.listDirty = false; reset() }
+        else if (state.listDirty) { state.listDirty = false; softReload() }
+        else renderAlbumHead() // 无变更：横幅要随 scope 切换回到正确显示状态
     }
 }
 export function gotoList(scope, albumId) {

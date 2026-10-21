@@ -13,6 +13,7 @@ import crypto from 'node:crypto'
 import { all as dbAll, get as dbGet, run as dbRun, tx } from './db.js'
 import { VIDEO_EXTENSIONS, IMAGE_EXTENSIONS } from './config.js'
 import { ensureVideoThumbnail, probeVideoMeta, trimVideoKeepRange } from './ffmpeg.js'
+import { fileMd5Streaming } from './files.js'
 import { findActiveUser, listActiveUsers } from './user-store.js'
 
 const PLACEHOLDER_SVG = Buffer.from(
@@ -147,12 +148,31 @@ export function createMediaHandlers(cfg) {
         return dbGet(`SELECT COUNT(*) AS c FROM items WHERE md5 = ?`, md5).c
     }
 
-    /** 引用为 0 时清理 store 文件与缩略图 */
+    /** 尝试删 md5 对应的 store 文件与缩略图（两者一起删）：全部删掉才返回 true，失败不抛 */
+    function purgeMd5Files(md5) {
+        let ok = true
+        try { const p = md5ToPath(md5); if (fs.existsSync(p)) fs.unlinkSync(p) } catch { ok = false }
+        try { const t = thumbToPath(md5); if (fs.existsSync(t)) fs.unlinkSync(t) } catch { ok = false }
+        return ok
+    }
+
+    /** 引用为 0 时清理 store 文件与缩略图；删不掉（Windows 播放器句柄占用等）则记入 pending_deletes 交给清扫器重试 */
     function cleanupMd5IfUnreferenced(md5) {
         if (!md5) return
         if (countMd5Refs(md5) > 0) return
-        try { const p = md5ToPath(md5); if (fs.existsSync(p)) fs.unlinkSync(p) } catch {}
-        try { const t = thumbToPath(md5); if (fs.existsSync(t)) fs.unlinkSync(t) } catch {}
+        if (!purgeMd5Files(md5)) {
+            dbRun(`INSERT OR IGNORE INTO pending_deletes (md5,created_at) VALUES (?,?)`, md5, nowMs())
+        }
+    }
+
+    /** 清扫待删记录：md5 重新被引用则撤账；否则重试删除，成功销账。启动与定时触发，导出给入口注册 */
+    function cleanupPendingDeletes() {
+        let removed = 0
+        for (const r of dbAll(`SELECT md5 FROM pending_deletes`)) {
+            if (countMd5Refs(r.md5) > 0) { dbRun(`DELETE FROM pending_deletes WHERE md5=?`, r.md5); continue }
+            if (purgeMd5Files(r.md5)) { dbRun(`DELETE FROM pending_deletes WHERE md5=?`, r.md5); removed++ }
+        }
+        return removed
     }
 
     // ===================== 列表 =====================
@@ -554,7 +574,7 @@ export function createMediaHandlers(cfg) {
         return { op, done, failed }
     }
 
-    // ===================== 视频裁剪（一个切点，保留前半或后半，原地替换旧文件）=====================
+    // ===================== 视频裁剪（一个切点，保留前半或后半，按新 md5 落盘换引用）=====================
 
     /** "HH:MM:SS" / "MM:SS" / 纯秒数 → 秒；非法返回 null（全角冒号与空格容错） */
     function parseTimeInput(v) {
@@ -577,12 +597,17 @@ export function createMediaHandlers(cfg) {
     }
 
     /**
-     * 裁剪当前视频：给一个切点，只保留切点之前或之后那一半，流拷贝后原地替换 store 里的旧文件。
-     * keep='before' 即剪掉片尾，keep='after' 即剪掉片头；不重编码，失败机会集中在容器层，
-     * ffmpeg 封装里已自带“流拷贝不行就重编码”的兑底。
-     * 文件名仍按旧 md5，不重算 md5；但需刷新 size/meta_json，并删除旧缩略图让首次访问时懒重生成。
-     * 注意：同 md5 的共享文件会被一并替换（本工具按 md5 去重存储，裁剪影响所有引用同一文件的 item）。
-     * 请求体：{ cutAt, keep }，cutAt 支持秒数或 HH:MM:SS / MM:SS 字符串，keep 为 'before' | 'after'。
+     * 裁剪当前视频：给一个切点，只保留切点之前或之后那一半；封装内按原片时长分流
+     * （≤10 分钟重编码帧级精剪，更长流拷贝、切点无效则报失败），产物按新内容重新算 md5
+     * 落盘 store/<xx>/<新md5>，item 改指向新文件。
+     * keep='before' 即剪掉片尾，keep='after' 即剪掉片头。
+     * 旧实现“rename 覆盖原路径”已废弃：Windows 下播放器持有句柄时覆盖必失败，
+     * 且破坏了“文件名 md5 = 内容 md5”的不变量（后来者上传同 md5 会拿到裁剪后的内容）。
+     * 旧文件的去向由 body.updateRefs 决定：
+     * - 勾选：所有引用旧 md5 的 item（含其他 collection）一并改指向新文件，引用归零后清理旧文件与缩略图；
+     * - 不勾选：只改当前 item，旧文件若仍被其他 item 引用则原样保留，无人用则删。
+     * 因为不再碰旧文件，播放器正在播也不影响裁剪；清理时被句柄占用删不掉会进 pending_deletes 延迟重试。
+     * 请求体：{ cutAt, keep, updateRefs }，cutAt 支持秒数或 HH:MM:SS / MM:SS 字符串，keep 为 'before' | 'after'。
      */
     async function trimItemVideo(ctx) {
         const row = getCollectionOrThrow(ctx.params.id)
@@ -613,10 +638,11 @@ export function createMediaHandlers(cfg) {
         const from = keep === 'after' ? cutAt : null
         const to = keep === 'before' ? cutAt : null
 
-        // 临时文件与目标同分片目录，rename 保证同盘原子替换；后缀沿用原扩展名让 ffmpeg 选对容器
+        // 临时文件与目标同分片目录（同盘 rename 快）；后缀沿用原扩展名让 ffmpeg 选对容器
         const ext = (item.ext || 'mp4').toLowerCase()
         const tmpPath = path.join(path.dirname(filePath),
             `${item.md5}.trim-${Date.now()}-${crypto.randomUUID()}.${ext}`)
+        let newMd5, finalPath
         try {
             await trimVideoKeepRange({
                 inputPath: filePath,
@@ -625,24 +651,73 @@ export function createMediaHandlers(cfg) {
                 endSec: to,
                 hasAudio: !!meta.audioCodec,
                 ext,
+                // 原时长供封装内分流：≤10 分钟直接重编码精剪；更长走流拷贝，剪了等于没剪则判失败报错
+                inputDurationSec: durationSec,
             })
-            fs.renameSync(tmpPath, filePath)
+            // 按新内容寻址落盘：库里已有同内容文件则直接复用，丢弃临时产物；
+            // rename 目标是全新路径，旧文件被播放器占用也不影响这一步
+            newMd5 = await fileMd5Streaming(tmpPath)
+            finalPath = md5ToPath(newMd5)
+            if (fs.existsSync(finalPath)) {
+                try { fs.unlinkSync(tmpPath) } catch {}
+            } else {
+                fs.renameSync(tmpPath, finalPath)
+            }
         } catch (e) {
             try { if (fs.existsSync(tmpPath)) fs.unlinkSync(tmpPath) } catch {}
             throw e
         }
 
-        // 旧缩略图基于旧内容（若剪掉片头会停在广告帧）：删除后由首次访问懒生成
-        try { const t = thumbToPath(item.md5); if (fs.existsSync(t)) fs.unlinkSync(t) } catch {}
+        // 时长/体积已变化：重新探测 meta；新缩略图由首次访问时懒生成，无需在此处理
+        const newMeta = await probeVideoMeta(finalPath)
+        const newSize = fs.statSync(finalPath).size
+        const metaJson = newMeta ? JSON.stringify(newMeta) : null
 
-        // 时长/体积已变化：重新探测 meta 并更新；md5 与存储路径不变
-        const newMeta = await probeVideoMeta(filePath)
-        const newSize = fs.statSync(filePath).size
-        dbRun(`UPDATE items SET size=?, meta_json=? WHERE id=?`,
-            newSize, newMeta ? JSON.stringify(newMeta) : null, item.id)
-        dbRun(`UPDATE collections SET updated_at=? WHERE id=?`, nowMs(), row.id)
+        // 剪完与原始内容完全一致（极罕见）：md5 不变，只刷新本 item 的 size/meta
+        if (newMd5 === item.md5) {
+            dbRun(`UPDATE items SET size=?, meta_json=? WHERE id=?`, newSize, metaJson, item.id)
+            dbRun(`UPDATE collections SET updated_at=? WHERE id=?`, nowMs(), row.id)
+            return { id: row.id, items: listItemsOf(row.id), trim: { newMd5, updatedRefs: false, unchanged: true, keptRefs: countMd5Refs(item.md5) } }
+        }
 
-        return { id: row.id, items: listItemsOf(row.id) }
+        const updateRefs = !!body.updateRefs
+        // 指向旧 md5 且本次会被改写的 item（勾选时含其他 collection）：在更新前取好 id 与受影响集合，
+        // 随结果返回供前端仅对这些资源绕开浏览器缓存；集合 updated_at 事务内统一 touch
+        const changedRefs = updateRefs
+            ? dbAll(`SELECT id, collection_id FROM items WHERE md5=?`, item.md5)
+            : [{ id: item.id, collection_id: row.id }]
+        const touched = [...new Set(changedRefs.map(r => r.collection_id))]
+        tx(() => {
+            if (updateRefs) {
+                dbRun(`UPDATE items SET md5=?, size=?, meta_json=? WHERE md5=?`, newMd5, newSize, metaJson, item.md5)
+            } else {
+                dbRun(`UPDATE items SET md5=?, size=?, meta_json=? WHERE id=?`, newMd5, newSize, metaJson, item.id)
+            }
+            for (const cid of touched) dbRun(`UPDATE collections SET updated_at=? WHERE id=?`, nowMs(), cid)
+        })
+        // 旧 md5：引用归零则连文件带缩略图一起清理（占用失败进 pending_deletes）；仍被引用则原样保留
+        cleanupMd5IfUnreferenced(item.md5)
+
+        return {
+            id: row.id, items: listItemsOf(row.id),
+            trim: {
+                newMd5, updatedRefs: updateRefs, affectedCollections: touched.length, keptRefs: countMd5Refs(item.md5),
+                // 本次换文件的 item 与受影响集合的 id：前端据此精准失效缓存，不动其他资源
+                itemIds: changedRefs.map(r => r.id), collectionIds: touched,
+            },
+        }
+    }
+
+    /** 该 item 文件（按 md5）在其他 item 中的引用情况：裁剪弹层用它告知“更新其他引用”的影响面 */
+    function itemMd5Refs(ctx) {
+        const item = dbGet(`SELECT * FROM items WHERE id=?`, ctx.params.itemId)
+        if (!item) throw new Error('文件不存在')
+        const row = getCollectionOrThrow(item.collection_id)
+        if (!canRead(ctx.user, row)) throw new Error('无权访问')
+        const agg = dbGet(
+            `SELECT COUNT(*) AS c, COUNT(DISTINCT collection_id) AS n FROM items WHERE md5=? AND id<>?`,
+            item.md5, item.id)
+        return { md5: item.md5, refCount: agg.c, refCollections: agg.n }
     }
 
     // ===================== 送人（转移所有权）=====================
@@ -777,7 +852,7 @@ export function createMediaHandlers(cfg) {
         listMedia, upload,
         getCollection, updateCollection, updateCollectionVisibility, deleteCollection,
         patchItems, collectionAddItems, mergeCollections, batchCollections, transferCollections, listUsers,
-        trimItemVideo,
+        trimItemVideo, itemMd5Refs, cleanupPendingDeletes,
         addFavorite, removeFavorite,
         serveItemFile, serveCollectionThumbnail, serveItemThumbnail,
     }

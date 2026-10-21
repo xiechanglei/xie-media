@@ -42,6 +42,62 @@ export function reset() {
     $('#empty').classList.add('hidden')
     load()
 }
+/** 软刷新：不清不铺骨架，按已加载的页数重拉 1..N 后整体替换数据并就地重建网格，
+ *  滚动位置保持不动；适用于裁剪/编辑这类“内容变了但结构基本稳定”的脏标记，
+ *  避免 reset() 把列表打回从头加载 */
+let pendingSoft = false
+export async function softReload() {
+    if (state.loading) { pendingSoft = true; return }
+    state.loading = true
+    $('#loading').classList.remove('hidden')
+    // 目录页（albums）后端不分页，一次到底；其余按已加载页数原样重拉
+    const pages = state.scope === 'albums' ? 1 : Math.max(1, Math.ceil(state.list.length / state.pageSize))
+    try {
+        const out = []
+        let total = state.total, got = 1
+        for (let p = 1; p <= pages; p++) {
+            const j = await api(listUrl(p))
+            const d = j.data || {}
+            const part = d.list || []
+            out.push(...part)
+            total = d.total ?? total
+            got = p
+            if (state.scope === 'album') {
+                state.albumHead = {
+                    title: (d.album && d.album.title) || '',
+                    entryCount: d.entryCount || 0,
+                    invisibleCount: d.invisibleCount || 0,
+                }
+            }
+            // 这一页没填满说明到底了，后面页不用再拉
+            if (part.length < state.pageSize) break
+        }
+        state.list = out
+        state.total = total
+        state.page = got
+        state.hasMore = out.length < total
+        // 静默替换：重建期间禁用入场动画，否则每张卡重放 cardIn 错峰淡入，看起来像“全部重刷”
+        const grid = $('#grid')
+        grid.classList.add('no-anim')
+        grid.innerHTML = ''
+        renderAppend(state.list)
+        grid.classList.remove('no-anim')
+        renderAlbumHead()
+        $('#endMsg').classList.toggle('hidden', state.hasMore || state.list.length === 0)
+        if (state.selectMode) updateSelectBar()
+        syncEmptyState()
+    } catch (e) {
+        toast('列表刷新失败，切页时将重新加载')
+        state.listDirty = true // 本次没换成：退回硬重载，下次切回列表走 reset()
+    } finally {
+        state.loading = false
+        $('#loading').classList.add('hidden')
+        requestAnimationFrame(() => {
+            if (pendingSoft) { pendingSoft = false; softReload() }
+            else fillViewport()
+        })
+    }
+}
 /** 三种列表共用一套无限滚动，仅数据源不同：目录=专辑列表，内页=册内资源，其它=资源列表 */
 function listUrl(page) {
     // 目录页后端不分页，拉一次到底；keyword 由后端按专辑名筛
@@ -81,7 +137,11 @@ export async function load() {
         if (state.selectMode) updateSelectBar()
         syncEmptyState()
     } catch (e) { toast('加载失败：' + e.message); state.hasMore = false }
-    finally { state.loading = false; clearSkeleton(); $('#loading').classList.add('hidden'); requestAnimationFrame(fillViewport) }
+    finally { state.loading = false; clearSkeleton(); $('#loading').classList.add('hidden'); requestAnimationFrame(() => {
+        // 分页请求进行中收到的软刷新请求先排队（pendingSoft），这里补做，不丢不叠
+        if (pendingSoft) { pendingSoft = false; softReload() }
+        else fillViewport()
+    }) }
 }
 function renderAppend(items) {
     const grid = $('#grid')

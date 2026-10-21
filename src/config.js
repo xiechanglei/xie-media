@@ -20,6 +20,9 @@ export const SCAN_INTERVAL_MS = 10_000
 // 半传输防护：文件 mtime 距今超过该毫秒数才认定"写完"，可入库
 export const SCAN_MTIME_STABLE_MS = 30_000
 
+// 待删文件（pending_deletes）清扫间隔（毫秒）：Windows 下被播放器占用的旧文件重试删除
+export const PENDING_DELETE_SWEEP_MS = 60_000
+
 // ===================== 离线下载（aria2）=====================
 // aria2 JSON-RPC 本地端口（仅监听 127.0.0.1，不对外）
 export const ARIA2_RPC_PORT = 6800

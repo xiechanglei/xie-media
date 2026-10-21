@@ -316,6 +316,8 @@ body.detail-mode .topbar { display: none; }
 
 /* ---------- 骨架屏 ---------- */
 .card.skeleton { cursor: default; animation: none; pointer-events: none; }
+/* 软刷新重建网格时不重放入场动画（见 list.js softReload） */
+#grid.no-anim .card { animation: none; }
 .card.skeleton:hover { transform: none; box-shadow: var(--shadow); border-color: var(--border); }
 .sk-block { background: var(--cover-ph); position: relative; overflow: hidden; }
 .sk-block::after {

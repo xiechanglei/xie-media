@@ -370,7 +370,7 @@
     </div>
 </div>
 
-<!-- 视频裁剪弹层：一个切点一刀两断，选保留前半还是后半；流拷贝后新文件原地替换旧文件（md5 不变）-->
+<!-- 视频裁剪弹层：一个切点一刀两断，选保留前半还是后半；流拷贝后按新 md5 落盘换引用，旧文件按引用计数处置（占用则延迟清扫）-->
 <div id="trimModal" class="modal hidden" role="dialog">
     <div class="modal-mask"></div>
     <div class="modal-body narrow">
@@ -388,6 +388,11 @@
             <label class="radio"><input type="radio" name="trimKeep" value="after"/>保留之后（剪片头）</label>
         </div>
         <div class="trim-hint" id="trimHint"></div>
+        <!-- 引用情况：打开弹层时查询同文件还被其他多少处引用，用于告知“更新其他引用”的影响面 -->
+        <div class="trim-hint" id="trimRefs"></div>
+        <div class="form-row trim-keep hidden">
+            <label class="radio"><input type="checkbox" id="trimUpdateRefs"> 更新其他地方的引用（其他资源也改用裁剪后的新文件，旧文件随之删除）</label>
+        </div>
         <div class="modal-foot">
             <div class="grow"></div>
             <button class="ghost" data-close="trimModal" type="button">取消</button>

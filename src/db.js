@@ -104,6 +104,14 @@ CREATE TABLE IF NOT EXISTS download_tasks (
 );
 CREATE INDEX IF NOT EXISTS idx_download_tasks_owner ON download_tasks(owner_id, created_at DESC);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_download_tasks_infohash ON download_tasks(info_hash) WHERE info_hash IS NOT NULL;
+
+-- 待删文件登记表：md5 引用归零但文件/缩略图删不掉时（Windows 下播放器句柄占用）挂账于此；
+-- 服务启动与定时清扫重试，删成功即销账；md5 重新被引用（同内容再次入库）则撤账不删。
+-- 只存 md5：文件与缩略图路径都可由 md5 推导，无需冗余落两列
+CREATE TABLE IF NOT EXISTS pending_deletes (
+  md5        TEXT PRIMARY KEY,
+  created_at INTEGER NOT NULL
+);
 `
 
 /**

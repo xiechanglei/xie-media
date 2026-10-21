@@ -68,12 +68,23 @@ export async function fileToBase64(file) {
     return btoa(bin)
 }
 
-// 媒体 URL：视频剪切原地替换文件后置时间戳，拼参数强制绕开浏览器缓存
-let mediaStamp = 0
-export const markMediaStale = () => { mediaStamp = Date.now() }
-export const itemUrl = (id) => `/media/items/${id}${mediaStamp ? `?t=${mediaStamp}` : ''}`
-export const itemThumbUrl = (id) => `/media/thumbnails/items/${id}${mediaStamp ? `?t=${mediaStamp}` : ''}`
-export const coverUrl = (colId) => `/media/thumbnails/collections/${colId}${mediaStamp ? `?t=${mediaStamp}` : ''}`
+// 媒体 URL 缓存绕开：戳按资源 id 记录（i:<itemId> / c:<colId>）落 localStorage，跨标签页/刷新仍生效。
+// 只有文件本体被替换的资源换 URL，其余媒体继续命中浏览器缓存
+// （旧版是全局单戳：剪一个视频会让全库封面 URL 齐变、图片全部重新下载）
+let mediaStamps = {}
+try { mediaStamps = JSON.parse(localStorage.getItem('xm-media-stamps') || '{}') || {} } catch { }
+try { localStorage.removeItem('xm-media-stamp') } catch { } // 清理旧版全局戳
+export const markMediaStale = ({ items = [], collections = [] } = {}) => {
+    const now = Date.now(), cut = now - 7 * 86400e3 // 只留 7 内的记录，防无限增长
+    for (const k of Object.keys(mediaStamps)) if (!(mediaStamps[k] > cut)) delete mediaStamps[k]
+    for (const id of items) mediaStamps[`i:${id}`] = now
+    for (const id of collections) mediaStamps[`c:${id}`] = now
+    try { localStorage.setItem('xm-media-stamps', JSON.stringify(mediaStamps)) } catch { }
+}
+const stampQ = (key) => mediaStamps[key] ? `?t=${mediaStamps[key]}` : ''
+export const itemUrl = (id) => `/media/items/${id}${stampQ(`i:${id}`)}`
+export const itemThumbUrl = (id) => `/media/thumbnails/items/${id}${stampQ(`i:${id}`)}`
+export const coverUrl = (colId) => `/media/thumbnails/collections/${colId}${stampQ(`c:${colId}`)}`
 
 // ---- 元数据展示小工具 ----
 export function fmtDur(sec) {

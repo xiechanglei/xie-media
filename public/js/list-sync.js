@@ -2,9 +2,9 @@
 // 详情在新标签页操作后，通过 BroadcastChannel 把变更实时应用到列表标签页；
 // 不支持 BC 的老内核降级为 localStorage + storage 事件（同样不回流发送页）
 import { state } from './state.js'
-import { $ } from './utils.js'
+import { $, markMediaStale } from './utils.js'
 import { icon } from './icons.js'
-import { reset, removeItemFromList } from './list.js'
+import { softReload, removeItemFromList } from './list.js'
 
 const listBC = 'BroadcastChannel' in window ? new BroadcastChannel('xm-list-sync') : null
 
@@ -45,10 +45,14 @@ export function initListSync() {
         if (msg.type === 'del') return removeItemFromList(msg.id)
         if (msg.type === 'fav') return applyFavChange(msg.id, msg.favorited)
         if (msg.type === 'vis') return applyVisChange(msg.id, msg.visibility)
+        // 媒体文件本体被替换（裁剪）：按服务端返回的受影响 id 精准置戳，只失效这几个资源的 URL，
+        // 其余封面继续命中缓存；戳虽落 localStorage，但已加载页的内存副本各页私有，必须广播
+        if (msg.type === 'stale-media') return markMediaStale({ items: msg.items, collections: msg.collections })
         if (msg.type === 'dirty') {
             if (state.view !== 'list') return
             if (document.hidden) { pendingDirty = true; return }
-            reset()
+            // 软刷新：保留已加载规模与滚动位置，不清页从头重载（reset 只留给切 scope/空列表）
+            softReload()
         }
     }
     if (listBC) listBC.addEventListener('message', e => apply(e.data))
@@ -56,6 +60,6 @@ export function initListSync() {
         if (e.key === 'xm-list-sync' && e.newValue) { try { apply(JSON.parse(e.newValue)) } catch { } }
     })
     document.addEventListener('visibilitychange', () => {
-        if (!document.hidden && pendingDirty) { pendingDirty = false; reset() }
+        if (!document.hidden && pendingDirty) { pendingDirty = false; softReload() }
     })
 }

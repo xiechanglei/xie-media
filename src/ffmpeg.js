@@ -66,20 +66,28 @@ export function probeVideoMeta(filePath) {
     })
 }
 
+/** 10 分钟以内的视频直接重编码裁剪：帧级精确，耗时可接受；更长才走流拷贝 */
+const REENCODE_MAX_SEC = 600
+/** 流拷贝产物与原片时长差小于该秒数，视为“剪了等于没剪”（切点回弹到首部关键帧），判定本次裁剪失败 */
+const COPY_NOOP_TOLERANCE_SEC = 0.5
+
 /**
  * 视频裁剪：只保留 [startSec, endSec] 这一连续区间，两端都可传 null 表示那一头不动。
  * 典型用法是一刀两断：留 startSec=null 即只剪片尾，留 endSec=null 即只剪片头。
- * 保留的是单段连续内容，所以能走 -c copy 流拷贝：不解码不重编码，耗时接近一次 remux。
- * 代价是 copy 只能在关键帧下刀，ffmpeg 会取所选时间之前最近的关键帧，实际起点可能早 1~2 秒，
- * 片头偶有几帧花屏；对「剪掉片头广告/片尾彩蛋」这类用途完全够用。
- * 若 copy 失败（个别容器/编码不支持时间戳重置），自动回退重编码，保证任何输入都能剪。
+ * 按原片时长分流：
+ * - 短视频（≤REENCODE_MAX_SEC）：直接重编码，帧级精确且耗时可接受；
+ * - 长视频：走 -c copy 流拷贝（不解码，耗时接近一次 remux），但 copy 只能在关键帧下刀，
+ *   切点会回弹到其前最近的关键帧，关键帧间隔大时（录屏/TS 压制源首关键帧在 0s）可能剪了等于没剪；
+ *   故产物时长与原片几乎一致时直接判失败报错，不自作主张降级重编码（长视频重编码耗时不可控，
+ *   要不要等由用户决定）；copy 进程本身失败仍回退重编码，保证任意输入都能剪。
  * 长任务用异步 spawn：不阻塞事件循环。失败抛 Error（附 stderr 尾部）。
- * @param {{ inputPath:string, outputPath:string, startSec:number|null, endSec:number|null, hasAudio:boolean, ext:string }} opts
+ * @param {{ inputPath:string, outputPath:string, startSec:number|null, endSec:number|null, hasAudio:boolean, ext:string, inputDurationSec?:number }} opts
  */
-export function trimVideoKeepRange({ inputPath, outputPath, startSec, endSec, hasAudio, ext }) {
+export function trimVideoKeepRange({ inputPath, outputPath, startSec, endSec, hasAudio, ext, inputDurationSec }) {
     const from = startSec && startSec > 0 ? startSec : null
     const to = endSec && endSec > 0 ? endSec : null
-    // -ss 放在 -i 之前是输入侧 seek：copy 模式直接跳到关键帧，前面的内容连解码都不做
+    // -ss 放在 -i 之前是输入侧 seek：copy 模式直接跳到关键帧，前面的内容连解码都不做；
+    // 重编码路径下同一位置则是帧级精确的（从关键帧解码、丢弃切点前的帧）
     const head = ['-hide_banner', '-loglevel', 'error', '-y']
     if (from != null) head.push('-ss', from.toFixed(3))
     head.push('-i', inputPath)
@@ -89,9 +97,22 @@ export function trimVideoKeepRange({ inputPath, outputPath, startSec, endSec, ha
         '-c', 'copy', '-avoid_negative_ts', 'make_zero',
         ...faststartFor(ext), outputPath]
     const encodeArgs = [...head, ...range, ...encodeArgsFor(ext, hasAudio), '-map_metadata', '0', outputPath]
+    // 探不到原时长（meta 异常）时无法分流，保守走 copy 路径
+    if (inputDurationSec && inputDurationSec <= REENCODE_MAX_SEC) {
+        return runFfmpeg(encodeArgs, '重编码')
+    }
     return runFfmpeg(copyArgs, '流拷贝')
         .catch(copyErr => runFfmpeg(encodeArgs, '重编码')
             .catch(encodeErr => { throw new Error(`${encodeErr.message}（流拷贝先失败：${copyErr.message}）`) }))
+        .then(async () => {
+            // 剪后产物与原片时长几乎一致 = 刀根本没落下去（切点回弹到了片头关键帧），明确报失败
+            if (!inputDurationSec) return
+            const out = await probeVideoMeta(outputPath)
+            const actual = out?.durationSec || 0
+            if (actual && inputDurationSec - actual < COPY_NOOP_TOLERANCE_SEC) {
+                throw new Error(`切点落在该片头关键帧间隔内，剪后时长（约 ${Math.round(actual)}s）与原视频一致，判定本次裁剪无效；请增大切点时间后重试`)
+            }
+        })
 }
 
 /** mp4/mov 把 moov 前置才能边下边播；流拷贝下这只是重排容器，不触及码率，代价极小 */

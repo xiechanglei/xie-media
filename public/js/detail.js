@@ -105,10 +105,10 @@ export function renderDetailBody() {
         btns.push(`<button class="mini-btn" data-act="album" type="button">${icon('layers', 13)} 加入专辑</button>`)
         if (canMutate) {
             btns.push(`<button class="mini-btn" data-act="vis" type="button">${d.visibility === 'public' ? `${icon('lock', 13)} 转私有` : `${icon('globe', 13)} 开放到广场`}</button>`)
-            // 列表模式且当前项是视频：可掐头去尾（只保留连续一段），完成后原地替换旧文件
+            // 列表模式且当前项是视频：可掐头去尾（只保留连续一段），完成后生成新文件并替换引用
             const cur = d.items[state.detailCurrentIdx]
             if (state.viewMode === 'list' && cur && cur.mediaType === 'video') {
-                btns.push(`<button class="mini-btn" data-act="trim" type="button" title="裁掉片头或片尾：只保留一段连续内容，不重编码，完成后替换旧文件">${icon('scissors', 13)} 裁剪</button>`)
+                btns.push(`<button class="mini-btn" data-act="trim" type="button" title="裁掉片头或片尾：只保留一段连续内容；短视频（10分钟内）重编码精确裁剪，长视频流拷贝快速裁剪（切点落在关键帧间隔内会提示失败），完成后生成新文件并替换引用">${icon('scissors', 13)} 裁剪</button>`)
             }
             btns.push(`<button class="mini-btn danger" data-act="del" type="button">${icon('trash', 13)} 删除</button>`)
         }
@@ -345,7 +345,7 @@ async function toggleVis(d) {
         if (visBtn) visBtn.innerHTML = next === 'public' ? `${icon('lock', 13)} 转私有` : `${icon('globe', 13)} 开放到广场`
     } catch (e) { toast('操作失败：' + e.message) }
 }
-// ---- 视频裁剪：一个切点一刀两断，选保留前半还是后半；流拷贝不重编码，成功后原地替换旧文件 ----
+// ---- 视频裁剪：一个切点一刀两断，选保留前半还是后半；≤10 分钟重编码精剪，更长流拷贝（剪了等于没剪会报失败）；产物按新 md5 落盘换引用，旧文件按引用计数处置 ----
 const fmtClock = (sec) => {
     sec = Math.max(0, Math.round(sec || 0))
     const h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60), s = sec % 60
@@ -412,6 +412,18 @@ function openTrimModal() {
     atEl.oninput = renderHint
     $$('input[name="trimKeep"]').forEach(r => { r.onchange = renderHint })
     renderHint()
+    // 查同文件在其他处的引用：有引用才亮出“更新其他地方的引用”勾选项；
+    // 查询失败不拦裁剪（不勾选就是安全路径，服务端会重新核实引用数）
+    const refsEl = $('#trimRefs'), refsChk = $('#trimUpdateRefs')
+    refsChk.checked = false
+    refsChk.closest('.form-row').classList.add('hidden')
+    refsEl.textContent = '正在查询该文件在其他资源中的引用情况…'
+    api(`/api/collections/${d.id}/items/${it.id}/md5-refs`).then(j => {
+        const c = (j && j.data && j.data.refCount) || 0
+        if (!c) { refsEl.textContent = '该文件仅被当前视频引用，裁剪后旧文件将连同缩略图一并清理'; return }
+        refsEl.textContent = `该文件还被其他 ${c} 处引用（分布在 ${j.data.refCollections} 个资源里）：不勾选则旧文件为它们原样保留；勾选则它们一并改用裁剪后的新文件`
+        refsChk.closest('.form-row').classList.remove('hidden')
+    }).catch(() => { refsEl.textContent = '引用情况查询失败：可直接裁剪，服务端会自行处置旧文件' })
     $('#trimSubmit').onclick = async () => {
         const t = parseClock(atEl.value)
         const keep = pickedKeep()
@@ -423,14 +435,23 @@ function openTrimModal() {
         try {
             const j = await api(`/api/collections/${d.id}/items/${it.id}/trim`, {
                 method: 'POST', headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ cutAt: t, keep }),
+                body: JSON.stringify({ cutAt: t, keep, updateRefs: refsChk.checked }),
             })
             if (j && j.data && Array.isArray(j.data.items)) { d.items = j.data.items; d.itemCount = d.items.length }
-            markMediaStale()           // 文件已原地替换：媒体 URL 加时间戳绕开浏览器缓存
-            markListDirty()            // 时长/体积变了，列表卡片聚合信息也要重拉
+            const tr = (j && j.data && j.data.trim) || {}
+            // 只给本次换了文件的资源置戳：其余封面 URL 不变、继续命中浏览器缓存（全局单戳会让全库图片重下载）
+            markMediaStale({ items: tr.itemIds, collections: tr.collectionIds })
+            notifyList({ type: 'stale-media', items: tr.itemIds, collections: tr.collectionIds }) // 其他标签页同步置戳（内存里的戳各页私有）
+            markListDirty()            // 时长/体积变了，列表卡片聚合信息也要重拉；其他被换引用的资源也靠它刷新
             closeModal('trimModal')
             renderDetail()
-            toast('已裁剪，旧文件已被替换')
+            toast(tr.updatedRefs
+                ? `已裁剪，${tr.affectedCollections} 个资源的引用已更新到新文件`
+                : tr.unchanged
+                    ? '已裁剪（内容与原文件一致，仅刷新了元信息）'
+                    : tr.keptRefs
+                        ? `已裁剪，旧文件仍被 ${tr.keptRefs} 处引用，已保留`
+                        : '已裁剪，旧文件及缩略图已清理')
         } catch (err) {
             toast('裁剪失败：' + err.message, 6000, 'error')
         } finally {

@@ -5,6 +5,7 @@ import { createAuthServer } from "@xie-work/xie-auth"
 import { resolveArgs } from "./src/args.js"
 import {
     ALLOWED_EXTENSIONS,
+    PENDING_DELETE_SWEEP_MS,
     SCAN_INTERVAL_MS,
     SCAN_MTIME_STABLE_MS,
     UPLOAD_MAX_FILES,
@@ -101,7 +102,10 @@ app.useAuth('/api/collections/:id', 'DELETE', media.deleteCollection)
 // -------- items 维护（重命名 / 删除 / 排序 / 追加 / 视频裁剪）--------
 app.useAuth('/api/collections/:id/items', 'PATCH', media.patchItems)
 app.useAuth('/api/collections/:id/items', 'POST', media.collectionAddItems)
-// 视频裁剪：只保留指定连续区间（掐头去尾），流拷贝不重编码，成功后原地替换旧文件（md5 不变）
+// 裁剪前的引用查询：同一文件（按 md5）还被其他多少处引用，供弹层告知风险
+app.useAuth('/api/collections/:id/items/:itemId/md5-refs', 'GET', media.itemMd5Refs)
+// 视频裁剪：只保留指定连续区间（掐头去尾），≤10 分钟重编码精剪、更长流拷贝（无效则报失败）；产物按新 md5 落盘并换 item 指向，
+// 旧文件按引用计数处置（updateRefs 勾选则连带更新其他引用），被占用则进 pending_deletes 延迟清扫
 app.useAuth('/api/collections/:id/items/:itemId/trim', 'POST', media.trimItemVideo)
 
 // -------- 收藏 --------
@@ -153,6 +157,11 @@ const scanner = createScanner({
     usersFile,
 })
 scanner.start()
+
+// -------- 待删文件清扫：裁剪/删除时因播放器句柄占用（Windows）没删掉的旧文件与缩略图，
+// 启动先扫一轮，之后定时重试；挂账在 pending_deletes 表，跨重启不丢 --------
+try { media.cleanupPendingDeletes() } catch (e) { console.warn('[pending-deletes] 启动清扫失败:', e.message) }
+setInterval(() => { try { media.cleanupPendingDeletes() } catch { /* 单轮失败下轮重试 */ } }, PENDING_DELETE_SWEEP_MS)
 
 // -------- 离线下载：拉起 aria2 子进程（未安装则软降级，不影响主服务；状态在启动横幅依赖区展示）--------
 const a2 = await aria2.start()
