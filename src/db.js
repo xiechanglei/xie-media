@@ -20,6 +20,7 @@ CREATE TABLE IF NOT EXISTS collections (
   owner_name    TEXT,
   visibility    TEXT NOT NULL DEFAULT 'private',
   created_at    INTEGER NOT NULL,
+  look_times    INTEGER NOT NULL DEFAULT 0,
   updated_at    INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_collections_owner      ON collections(owner_id);

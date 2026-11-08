@@ -200,9 +200,10 @@ export function createMediaHandlers(cfg) {
 
         let rows
         if (scope === 'mine') {
-            rows = dbAll(`SELECT * FROM collections WHERE owner_id=? ORDER BY created_at DESC`, user.id)
+            // 按照 look_times 倒叙排列，look_times 一样的情况下，按照 created_at 倒叙排列
+            rows = dbAll(`SELECT * FROM collections WHERE owner_id=? ORDER BY look_times ASC, created_at DESC`, user.id)
         } else if (scope === 'plaza') {
-            rows = dbAll(`SELECT * FROM collections WHERE visibility='public' ORDER BY created_at DESC`)
+            rows = dbAll(`SELECT * FROM collections WHERE visibility='public' ORDER BY look_times ASC,created_at DESC`)
         } else { // favorites
             rows = dbAll(
                 `SELECT c.* FROM collections c
@@ -295,6 +296,8 @@ export function createMediaHandlers(cfg) {
         const fav = dbGet(
             `SELECT 1 AS x FROM favorites WHERE user_id=? AND target_id=?`,
             ctx.user.id, row.id)
+        // 更新资源的播放次数
+        dbRun(`UPDATE collections SET look_times = look_times + 1 WHERE id = ?`, row.id)
         return {
             id: row.id, title: row.title, category: row.category,
             ownerId: row.owner_id, ownerName: row.owner_name, visibility: row.visibility,
